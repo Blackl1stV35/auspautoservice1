@@ -1,1 +1,4 @@
 # note/
+
+# ignore .env file for local development
+.env
