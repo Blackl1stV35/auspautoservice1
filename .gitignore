@@ -1,4 +1,10 @@
-# note/
+# Ignore the following files and directories
+note/
+data/* 
+output_log.txt
 
 # ignore .env file for local development
 .env
+
+# ignore compiled Python files and cache directories
+__pycache__/*
