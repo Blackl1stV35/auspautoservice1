@@ -78,8 +78,30 @@ def process_requisitions_excel(file_path):
         df_melted = df_melted[~df_melted['Employee_Name'].astype(str).str.contains('เดือน')]
 
         for index, row in df_melted.iterrows():
-            print(f"     [Ready to Insert] Employee: {row['Employee_Name']} took {row['Material_Name']}, Qty: {row['Quantity']}")
-            # supabase.table("transactions").insert({"employee_id": ..., "material_id": ..., "quantity": row['Quantity']}).execute()
+            emp_name = str(row['Employee_Name']).strip()
+            mat_name = str(row['Material_Name']).strip()
+            qty = row['Quantity']
+            
+            print(f"     [Inserting] Employee: {emp_name} took {mat_name}, Qty: {qty}")
+            
+            # 1. หาหรือสร้าง Employee ID
+            emp_res = supabase.table("employees").select("id").eq("name", emp_name).execute()
+            if not emp_res.data:
+                emp_res = supabase.table("employees").insert({"name": emp_name}).execute()
+            emp_id = emp_res.data[0]['id']
+
+            # 2. หาหรือสร้าง Material ID
+            mat_res = supabase.table("materials").select("id").eq("item_name", mat_name).execute()
+            if not mat_res.data:
+                mat_res = supabase.table("materials").insert({"item_name": mat_name}).execute()
+            mat_id = mat_res.data[0]['id']
+
+            # 3. บันทึก Transaction ลง Database จริง
+            supabase.table("transactions").insert({
+                "employee_id": emp_id,
+                "material_id": mat_id,
+                "quantity": qty
+            }).execute()
 
 def process_purchasing_excel(file_path):
     """Processes purchasing and cost files."""
@@ -107,13 +129,28 @@ def process_purchasing_excel(file_path):
             df['Quantity'] = df['Quantity'].apply(clean_quantity)
         
         for index, row in df.iterrows():
-            # Apply the date fix
+            mat_name = str(row['Material_Name']).strip()
             raw_date = row.get('Purchase_Date')
             clean_date = fix_thai_date(raw_date)
-            date_val = clean_date.strftime('%Y-%m-%d') if pd.notnull(clean_date) else 'N/A'
+            date_val = clean_date.strftime('%Y-%m-%d') if pd.notnull(clean_date) else None
             
-            print(f"     [Ready to Insert] Bought {row['Material_Name']} from {row.get('Supplier_Name', 'N/A')} on {date_val}")
-            # supabase.table("purchases").insert({...}).execute()
+            print(f"     [Inserting] Bought {mat_name} from {row.get('Supplier_Name', 'N/A')}")
+            
+            # 1. หาหรือสร้าง Material ID
+            mat_res = supabase.table("materials").select("id").eq("item_name", mat_name).execute()
+            if not mat_res.data:
+                mat_res = supabase.table("materials").insert({"item_name": mat_name}).execute()
+            mat_id = mat_res.data[0]['id']
+
+            # 2. บันทึกข้อมูลการซื้อลง Database จริง
+            supabase.table("purchases").insert({
+                "material_id": mat_id,
+                "supplier_name": str(row.get('Supplier_Name', '')),
+                "quantity": row.get('Quantity', 0),
+                "price_per_unit": row.get('Price_Per_Unit', 0),
+                "total_amount": row.get('Total_Amount', 0),
+                "purchase_date": date_val
+            }).execute()
 
 # ==========================================
 # PART 2: AI / ML ANALYTICS
