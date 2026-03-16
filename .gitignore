@@ -1,10 +1,31 @@
-# Ignore the following files and directories
-note/
-data/* 
-output_log.txt
-
-# ignore .env file for local development
+# Environments
 .env
+.venv
+env/
+venv/
+ENV/
 
-# ignore compiled Python files and cache directories
-__pycache__/*
+# Data Files (Crucial: Protects your company's actual Excel/CSV files)
+data/*
+!data/.keep
+
+# Logs and Databases
+*.log
+pipeline.log
+*.sqlite3
+
+# Python Cache & Compiled Files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# IDE / OS specific files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Docker
+.dockerignore
