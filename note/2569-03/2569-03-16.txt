@@ -990,3 +990,4 @@ Process finished successfully!
     Check your terminal or the newly generated pipeline.log file to watch the multi-threaded system process your data at lightning speed!
 
     How does this project structure look to you? Are you ready to initialize the Git repository?
+
