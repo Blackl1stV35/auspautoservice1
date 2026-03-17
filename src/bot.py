@@ -15,7 +15,6 @@ LINE_HEADERS = {
 }
 
 def reply_to_line(reply_token: str, text: str):
-    """Sends a reply message back to the LINE user."""
     payload = {
         "replyToken": reply_token,
         "messages": [{"type": "text", "text": text}]
@@ -23,10 +22,8 @@ def reply_to_line(reply_token: str, text: str):
     requests.post("https://api.line.me/v2/bot/message/reply", headers=LINE_HEADERS, json=payload)
 
 def process_line_message(message_id: str, message_type: str, text: str, reply_token: str):
-    """Background task to handle audio download, NLP parsing, and DB insertion."""
     transcript = text
     
-    # 1. Handle Audio (Voice Memos)
     if message_type == "audio":
         audio_url = f"https://api-data.line.me/v2/bot/message/{message_id}/content"
         res = requests.get(audio_url, headers={"Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}"})
@@ -36,8 +33,6 @@ def process_line_message(message_id: str, message_type: str, text: str, reply_to
             f.write(res.content)
         
         transcript = transcribe_audio(audio_path)
-        
-        # Cleanup temp file
         if os.path.exists(audio_path):
             os.remove(audio_path)
             
@@ -45,17 +40,15 @@ def process_line_message(message_id: str, message_type: str, text: str, reply_to
         reply_to_line(reply_token, "❌ ไม่สามารถฟังเสียงได้ชัดเจน รบกวนพิมพ์ข้อความครับ")
         return
         
-    # 2. Extract Data via LLM
     parsed_data = parse_requisition_text(transcript)
     if not parsed_data or "employee_name" not in parsed_data:
         reply_to_line(reply_token, "❌ AI ไม่สามารถแยกข้อมูลได้ รบกวนพิมพ์ใหม่อีกครั้งครับ")
         return
         
-    # 3. Save to Database
     try:
         emp_name = parsed_data.get("employee_name", "Unknown")
         item_name = parsed_data.get("item_name", "Unknown")
-        qty = float(parsed_data.get("quantity", 0))
+        qty = float(parsed_data.get("quantity", 1.0)) # Default to 1
 
         emp_id = get_or_create_employee(emp_name)
         mat_id = get_or_create_material(item_name)
@@ -66,19 +59,18 @@ def process_line_message(message_id: str, message_type: str, text: str, reply_to
             "quantity": qty
         }).execute()
         
-        success_msg = f"✅ บันทึกสำเร็จ:\nพนักงาน: {emp_name}\nเบิก: {item_name}\nจำนวน: {qty}"
-        reply_to_line(reply_token, success_msg)
-        logger.info(f"LINE Transaction saved: {emp_name} took {qty} of {item_name}")
+        reply_to_line(reply_token, f"✅ บันทึกสำเร็จ:\nพนักงาน: {emp_name}\nเบิก: {item_name}\nจำนวน: {qty}")
+        logger.info(f"LINE TX saved: {emp_name} took {qty} of {item_name}")
         
     except Exception as e:
-        logger.error(f"DB Insert Error from LINE: {e}")
+        logger.error(f"DB Insert Error: {e}")
         reply_to_line(reply_token, "❌ เกิดข้อผิดพลาดในการบันทึกลงฐานข้อมูล")
 
+# Added both routes to catch traffic regardless of LINE configuration
 @app.post("/webhook")
+@app.post("/callback")
 async def line_webhook(request: Request, background_tasks: BackgroundTasks):
-    """Receives events from LINE Platform."""
     body = await request.json()
-    
     for event in body.get("events", []):
         if event.get("type") == "message":
             reply_token = event["replyToken"]
@@ -87,7 +79,6 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
             msg_id = msg["id"]
             text = msg.get("text", "")
             
-            # Route text and audio to the background processor
             if msg_type in ["text", "audio"]:
                 background_tasks.add_task(process_line_message, msg_id, msg_type, text, reply_token)
                 
@@ -95,13 +86,11 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
 
 @app.post("/trigger-etl")
 def api_trigger_etl():
-    """Endpoint to trigger the ETL process manually"""
     req_file = r"data\เอสพี--สถิติเบิกวัสดุสิ้นเปลือง(69).xlsx"
     pur_file = r"data\3--เอสพี--ต้นทุนแผนกสี และน้ำมัน และกิ๊บน๊อต.xlsx"
-    
     try:
         run_etl_pipeline(req_file, pur_file)
         run_ai_analysis()
-        return {"status": "Success", "message": "Pipeline and AI analysis executed."}
+        return {"status": "Success"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
