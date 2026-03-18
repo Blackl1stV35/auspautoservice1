@@ -2,7 +2,7 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies required for Prophet and Pandas
+# Install system dependencies required for data processing
 RUN apt-get update && apt-get install -y \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
@@ -15,5 +15,5 @@ COPY . .
 # Expose port for the FastAPI Bot
 EXPOSE 8000
 
-# Default command runs the bot (can be overridden to run ETL)
-CMD ["uvicorn", "src.bot:app", "--host", "0.0.0.0", "--port", "8000"]
+# Default command runs the lightweight API server
+CMD ["uvicorn", "src.api.bot:app", "--host", "0.0.0.0", "--port", "8000"]

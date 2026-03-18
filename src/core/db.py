@@ -1,13 +1,11 @@
-from src.config import supabase, logger
+from src.core.config import supabase, logger
 
-# Cache dictionaries to minimize database calls
 _employee_cache = {}
 _material_cache = {}
 
 def get_or_create_employee(name: str) -> int:
     name = str(name).strip()
-    if name in _employee_cache:
-        return _employee_cache[name]
+    if name in _employee_cache: return _employee_cache[name]
         
     res = supabase.table("employees").select("id").eq("name", name).execute()
     if res.data:
@@ -21,8 +19,7 @@ def get_or_create_employee(name: str) -> int:
 
 def get_or_create_material(name: str) -> int:
     name = str(name).strip()
-    if name in _material_cache:
-        return _material_cache[name]
+    if name in _material_cache: return _material_cache[name]
         
     res = supabase.table("materials").select("id").eq("item_name", name).execute()
     if res.data:
@@ -35,13 +32,11 @@ def get_or_create_material(name: str) -> int:
     return mat_id
 
 def batch_insert(table_name: str, data: list, batch_size: int = 500):
-    """Inserts data in chunks to optimize memory and network speed."""
-    if not data:
-        return
+    if not data: return
     for i in range(0, len(data), batch_size):
         batch = data[i:i + batch_size]
         try:
             supabase.table(table_name).insert(batch).execute()
-            logger.info(f"Successfully inserted batch of {len(batch)} into {table_name}")
+            logger.info(f"Inserted {len(batch)} rows into {table_name}")
         except Exception as e:
-            logger.error(f"Failed to insert batch into {table_name}: {e}")
+            logger.error(f"Failed to insert into {table_name}: {e}")

@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 from sklearn.ensemble import IsolationForest
 from sklearn.linear_model import LinearRegression
-from src.config import supabase, logger
+from src.core.config import supabase, logger
 from datetime import date, timedelta
 
 def fetch_table(table_name):
