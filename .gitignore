@@ -3,3 +3,4 @@ __pycache__/
 venv/
 .env
 data/upload_*.xlsx
+__init__.py
