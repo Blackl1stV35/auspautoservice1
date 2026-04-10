@@ -1,3 +1,11 @@
+<<<<<<< HEAD
+__pycache__/
+*.pyc
+venv/
+.env
+data/upload_*.xlsx
+__init__.py
+=======
 # Environments
 .env
 .venv
@@ -35,3 +43,4 @@ supabase/*
 
 # Steamlit
 .streamlit/
+>>>>>>> 879dea7dcbb7a4bcd718cbfeb898016608afe155
