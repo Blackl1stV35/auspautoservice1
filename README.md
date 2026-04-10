@@ -1,200 +1,415 @@
-# 🚗 SP Auto Service Management System
+# AUS Auto Service - Inventory Management System
 
-**Modernizing SP Auto Service Co., Ltd.** --- an independent auto repair
-and body/paint garage in Chachoengsao, Thailand.
+A comprehensive inventory and material management system for mechanical spare parts operations, built with **Streamlit**, **Pandas**, and **Git-based versioning**.
 
-This repository documents the full evolution of the garage's internal
-operations system:
+![Status](https://img.shields.io/badge/Status-Active-brightgreen) ![Version](https://img.shields.io/badge/Version-2.0.0%20Streamlit-blue) ![License](https://img.shields.io/badge/License-MIT-green)
 
-- **v2.0.0-streamlit-phase1** (Current Recommended) — Modern Streamlit web app with clean ETL, stock tracking, mechanic audit trail, and Git versioning.
-- **v1.5.0-vba** — Original working Excel + VBA macros (daily production use).
-- **v1.0.0-original** — Early AI + LINE bot + Supabase pipeline (reference only).
+---
 
-------------------------------------------------------------------------
+## 📋 Overview
 
-# 📋 Project Overview
+AUS Auto Service is a web-based inventory management solution designed for spare parts workshops. It provides:
 
-SP Auto Service processes **100+ vehicles per day** with a workforce of
-**40--60 technicians and staff**.\
-The previous manual Excel workflow for **consumables issuance and
-purchase/cost tracking** was slow, difficult to audit, and vulnerable to
-waste or misuse.
+✅ **Real-time Stock Management** - Track inventory levels, low stock alerts  
+✅ **Material Requisition** - Record material issuance to employees  
+✅ **Purchase Tracking** - Log incoming purchases and supplier info  
+✅ **Audit Logging** - Complete transaction history with Git versioning  
+✅ **Data Analytics** - Anomaly detection, usage patterns, forecasting  
+✅ **User-Friendly Interface** - Built with Streamlit for instant access  
 
-This repository introduces a structured modernization path.
+---
 
-### What this repository provides
+## 🏗️ Repository Structure
 
-**Phase 1 -- Active System** - Clean **Streamlit web application** -
-Automated **ETL pipeline** for the original Excel data sources - Digital
-**consumable issuance system** - **Stock management** dashboard -
-**Per-mechanic usage tracking** - Basic **anomaly detection for unusual
-consumption**
+### Active Branch: `main` (Streamlit Phase 2+)
 
-**Original Pipeline (Legacy but included)**
-
-The original architecture is still included for reference and
-experimentation:
-
--   AI consumption analysis
--   LINE Bot interface
--   Supabase database integration
-
-------------------------------------------------------------------------
-
-# 🚀 Quick Start (Recommended -- Streamlit Phase 1)
-
-Clone and run the modern web interface locally.
-
-``` bash
-# 1. Clone the repository
-git clone https://github.com/Blackl1stV35/auspautoservice1.git
-cd auspautoservice1
-
-# 2. Create a virtual environment
-python -m venv venv
-
-# Windows
-venv\Scripts\activate
-
-# macOS / Linux
-source venv/bin/activate
-
-# 3. Install dependencies
-pip install -r requirements.txt
-
-# 4. Run the Streamlit app
-streamlit run app.py
+```
+auspautoservice1/
+├── app.py                 # Streamlit main application
+├── requirements.txt       # Python dependencies
+├── LICENSE                # MIT License
+├── README.md             # This file
+├── .gitignore            # Git ignore patterns
+├── .streamlit/
+│   └── config.toml       # Streamlit configuration
+├── src/
+│   ├── __init__.py
+│   ├── data_store.py     # CSV-based data layer with Git integration
+│   └── etl.py            # ETL and data processing
+├── data/                  # CSV data storage (auto-committed to Git)
+│   ├── stock.csv
+│   ├── requisitions.csv
+│   ├── employees.csv
+│   ├── materials.csv
+│   ├── purchases.csv
+│   ├── audit_log.csv
+│   └── purchase_summary.csv
+├── v1-vba/               # Original Excel + VBA system (archived)
+│   ├── README.md
+│   ├── *.xlsx / *.xlsm
+│   └── VBA_*.bas
+└── v1-original-python/   # Original AI/ML pipeline (archived)
+    ├── README.md
+    ├── run_*.py
+    ├── docker-compose.yml
+    └── src_old_*/
 ```
 
-Then open your browser:
+### Archive Folders
 
-    http://localhost:8501
+**`v1-vba/`** - Original Excel + VBA system  
+Contains the first version built in Excel with VBA macros for automation.
 
-------------------------------------------------------------------------
+**`v1-original-python/`** - Original AI/ML Pipeline  
+Contains the first Python-based system with Supabase backend, LINE Bot integration, and ML forecasting. See [v1-original-python/README.md](v1-original-python/README.md) for details.
 
-# 📁 Project Structure
+---
 
-    auspautoservice1/
-    │
-    ├── app.py                    # Main Streamlit application (Phase 1)
-    ├── .streamlit/               # Streamlit configuration
-    ├── data/                     # CSV/Parquet datasets (auto-managed)
-    ├── src/                      # ETL pipeline and utility modules
-    ├── v1-vba/                   # Original Excel + VBA system (planned archive)
-    │
-    ├── run_etl.py                # Legacy ETL pipeline
-    ├── run_api.py                # Legacy API service
-    │
-    ├── requirements.txt
-    ├── README.md
-    └── .gitignore
+## 📦 Installation & Setup
 
-------------------------------------------------------------------------
+### Prerequisites
 
-# 🔄 How the System Works (Streamlit Phase 1)
+- Python 3.9+
+- Git
+- pip or conda
 
-### 1️⃣ Upload Excel Data
+### Getting Started
 
-Upload the original operational spreadsheets:
+1. **Clone the repository:**
 
--   **สถิติเบิกวัสดุ** (Consumables issuance statistics)
--   **ต้นทุนแผนกสี** (Paint department cost tracking)
+   ```bash
+   git clone https://github.com/Blackl1stV35/auspautoservice1.git
+   cd auspautoservice1
+   ```
 
-The system automatically cleans and converts them into structured
-datasets.
+2. **Create a virtual environment:**
 
-------------------------------------------------------------------------
+   ```bash
+   python -m venv venv
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   ```
 
-### 2️⃣ Issue Consumables
+3. **Install dependencies:**
 
-Mechanics can digitally request materials:
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-1.  Select **mechanic**
-2.  Select **material**
-3.  Enter **quantity**
-4.  Submit request
+4. **Run the application:**
 
-Each transaction is logged with a **complete audit trail**.
+   ```bash
+   streamlit run app.py
+   ```
 
-------------------------------------------------------------------------
+5. **Access the app:**
 
-### 3️⃣ Stock Management
+   Open your browser to `http://localhost:8501`
 
-The system tracks:
+---
 
--   Current inventory levels
--   Low-stock alerts
--   New purchase entries
--   Historical usage patterns
+## 🔑 Key Features
 
-------------------------------------------------------------------------
+### Data Management
 
-### 4️⃣ Reports & Monitoring
+- **CSV-Based Storage**: Lightweight, version-controllable data format
+- **Automatic Git Commits**: Every transaction is recorded in Git history
+- **Thread-Safe Operations**: Concurrent access support with file locking
+- **No Database Required**: Self-contained with zero external dependencies
 
-Managers can view:
+### Domain Operations
 
--   Per-mechanic material consumption
--   Top-used consumables
--   Early anomaly detection for unusual usage
+```python
+from src.data_store import *
 
-------------------------------------------------------------------------
+# Get current stock levels
+stock = get_stock()
 
-### 5️⃣ Automatic Git Versioning
+# Issue material to employee
+issue_material(
+    employee_name="John",
+    material_name="Bearing",
+    quantity=5,
+    issued_by="Manager"
+)
 
-Every change to the data layer is automatically tracked via **Git**,
-enabling:
+# Add purchases/receiving
+add_stock("Bearing", quantity=20, user="Supplier")
 
--   Full audit history
--   Data recovery
--   Operational transparency
+# Low stock alerts
+low_items = get_low_stock(threshold=10)
 
-------------------------------------------------------------------------
+# Usage analytics & anomaly detection
+anomalies = get_anomalies(z_threshold=2.0)
 
-# 🗺️ Development Roadmap
+# Complete audit trail
+audit_log = get_audit_log()
+```
 
-### Phase 1 -- Current
+### Audit & Git Integration
 
--   Streamlit MVP
--   ETL pipeline for Excel files
--   Git-based version tracking
+- All transactions logged to `audit_log.csv`
+- Changes automatically committed to Git with descriptive messages
+- Complete transaction history available via Git history
+- Enables rollback and historical analysis
 
-### Phase 2 -- Operations Enhancement
+---
 
--   Barcode scanner support
--   Improved anomaly detection
--   Faster data ingestion
+## 📊 Data Schema
 
-### Phase 3 -- Communication Layer
+### stock.csv
+| Column | Type | Description |
+|--------|------|-------------|
+| mat_id | int | Material ID |
+| item_name | str | Material name |
+| current_qty | int | Current quantity in stock |
+| last_updated | datetime | Last update timestamp |
 
--   LINE Bot integration
--   Voice and text material requests
--   Supabase cloud database
+### requisitions.csv
+| Column | Type | Description |
+|--------|------|-------------|
+| req_id | int | Requisition ID (timestamp-based) |
+| employee_name | str | Employee receiving the material |
+| material_name | str | Material being issued |
+| quantity | int | Quantity issued |
+| date | date | Date of issuance |
+| time | time | Time of issuance |
+| issued_by | str | Person authorizing the issuance |
+| month | int | Month |
+| year | int | Year (Buddhist calendar) |
+| sheet | str | Source (e.g., "app_entry") |
 
-### Phase 4 -- Intelligence Layer
+### audit_log.csv
+| Column | Type | Description |
+|--------|------|-------------|
+| timestamp | datetime | When the action occurred |
+| user | str | User performing the action |
+| action | str | Type of action (Thai) |
+| detail | str | Details of the action |
 
--   AI forecasting for material demand
--   Automated procurement suggestions
--   Metabase operational dashboards
+### materials.csv
+| Column | Type | Description |
+|--------|------|-------------|
+| material_id | int | Unique identifier |
+| material_name | str | Name of the material |
+| unit | str | Unit of measurement |
+| category | str | Material category |
+| supplier | str | Default supplier |
 
-------------------------------------------------------------------------
+### employees.csv
+| Column | Type | Description |
+|--------|------|-------------|
+| employee_id | int | Unique identifier |
+| name | str | Employee name |
+| department | str | Department |
+| position | str | Job position |
 
-# 📝 Design Principles
+---
 
-The system is designed with the real garage environment in mind:
+## 🌳 Version History & Releases
 
--   **Mobile-friendly UI** for mechanics and supervisors
--   **Minimal training required**
--   **Full audit trail for accountability**
--   **Automatic Git backups** for operational safety
+### Phase 2: **Streamlit Implementation** (Active) - [Tag: v2.0.0-streamlit-phase1]
 
-Legacy scripts remain available for teams experimenting with the full AI
-pipeline.
+**Status:** ✅ Production Ready
 
-------------------------------------------------------------------------
+Modern web interface with Streamlit, perfect for daily operations:
 
-# 🏢 Organization
+- Real-time stock tracking
+- Material requisition forms
+- Purchase logging
+- Audit trail visualization
+- Analytics & anomaly detection
+- Thai language support
+- CSV-based local storage
+- Automatic Git versioning
+- Cross-platform (Windows, Linux, macOS)
 
-**SP Auto Service Co., Ltd.**\
-Chachoengsao, Thailand
+**Key Features:**
+- Zero external database dependencies
+- Self-contained data storage
+- Instant startup and deployment
+- Easy data export and analysis
 
-*Last Updated: April 2026*
+---
+
+### Phase 1: **Excel + VBA System** (Archived) - [Tag: v1.5.0-vba]
+
+**Status:** 🔄 Historical Reference
+
+Original spreadsheet-based system with VBA macros:
+
+- Excel workbooks with automated workflows
+- VBA macros for calculations and validations
+- Manual data entry and reporting
+- See `v1-vba/` folder for original files
+
+---
+
+### Phase 0: **Original AI Pipeline** (Historical) - [Tag: v1.0.0-original]
+
+**Status:** 📦 Archive
+
+First Python-based implementation:
+
+- Supabase cloud database
+- LINE Bot integration for notifications
+- ML forecasting engine
+- Docker containerized deployment
+- Metabase analytics
+- See `v1-original-python/` folder for details
+
+---
+
+## 🔄 Git Integration
+
+This system uses Git as a version control and audit trail system:
+
+```bash
+# View all material transactions
+git log --oneline data/requisitions.csv
+
+# See all stock additions
+git log --grep="รับเข้า" --oneline
+
+# View specific employee operations
+git log --grep="John" --oneline
+
+# See transaction details
+git show <commit>:data/requisitions.csv
+
+# Revert a transaction (advanced)
+git checkout <commit> -- data/
+```
+
+### Automatic Commits
+
+Every material transaction automatically creates a Git commit:
+
+- **Material Issuance**: `เบิก: [Employee] - [Material] x[Qty]`
+- **Stock Receipt**: `รับเข้า: [Material] +[Qty]`
+- **Manual Audit**: Descriptive commit messages for all operations
+
+---
+
+## 🚀 Future Development (Phase 2+)
+
+Planned features for upcoming releases:
+
+- [ ] Barcode/QR code scanning for material tracking
+- [ ] Advanced analytics dashboard with charts
+- [ ] Supplier management system
+- [ ] Predictive inventory alerts
+- [ ] Multi-location support
+- [ ] User authentication & role-based access control
+- [ ] Export reports (PDF, Excel)
+- [ ] Mobile app companion
+
+---
+
+## 🛠️ Technology Stack
+
+- **Frontend**: Streamlit 1.56.0
+- **Data Processing**: Pandas 3.0.2
+- **Storage**: CSV + Git
+- **Language Support**: Python 3.9+
+- **Version Control**: Git 2.0+
+- **License**: MIT
+
+---
+
+## 📝 License
+
+MIT License - See [LICENSE](LICENSE) file for details
+
+This means you are free to:
+- Use in personal or commercial projects
+- Modify and distribute
+- Use privately
+
+---
+
+## 👤 Contributors
+
+- **Blackl1st V35** - Lead Developer - [GitHub](https://github.com/Blackl1stV35)
+
+---
+
+## 📞 Support & Issues
+
+For issues, questions, or feature requests:
+
+1. **Check existing issues** - [GitHub Issues](https://github.com/Blackl1stV35/auspautoservice1/issues)
+2. **Create a new issue** - Provide detailed description and steps to reproduce
+3. **Contact maintainer** - Via GitHub or email
+
+### Common Issues
+
+**Issue:** Streamlit app won't start
+- **Solution:** Ensure Python 3.9+ and run `pip install -r requirements.txt`
+
+**Issue:** Permission denied on data files
+- **Solution:** Check file permissions in `data/` folder
+
+**Issue:** Git commits not working
+- **Solution:** Ensure Git is installed and in system PATH
+
+---
+
+## 📚 Documentation
+
+- **Main Application**: [app.py](app.py)
+- **Data Layer API**: [src/data_store.py](src/data_store.py)
+- **ETL Logic**: [src/etl.py](src/etl.py)
+- **Original System**: [v1-original-python/README.md](v1-original-python/README.md)
+- **VBA System**: [v1-vba/README.md](v1-vba/README.md)
+- **Configuration**: [.streamlit/config.toml](.streamlit/config.toml)
+
+---
+
+## 🎯 Project Goals
+
+✅ **Simplify Operations** - Eliminate manual spreadsheet management  
+✅ **Improve Accuracy** - Automated tracking and calculations  
+✅ **Enable Analytics** - Data-driven decision making  
+✅ **Maintain History** - Complete audit trail with Git  
+✅ **Easy Deployment** - Zero dependencies, instant setup  
+
+---
+
+## 🤝 Contributing
+
+Contributions are welcome! Please:
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit changes (`git commit -m 'Add amazing feature'`)
+4. Push to branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+---
+
+## 📅 Project Timeline
+
+- **v1.0.0 (Phase 0)** - Jan 2026 - Original AI/ML pipeline with Supabase
+- **v1.5.0** - Feb 2026 - Added Excel VBA system (v1-vba)
+- **v2.0.0 (Phase 1)** - Mar-Apr 2026 - Streamlit implementation (current)
+- **v2.1.0 (Phase 2)** - Q2 2026 - Barcode scanning & mobile app
+- **v3.0.0 (Phase 3)** - Q3 2026 - Multi-location & advanced features
+
+---
+
+*Last Updated: 2026-04-10*  
+*Version: 2.0.0-streamlit-phase1*  
+*Repository: https://github.com/Blackl1stV35/auspautoservice1*
+
+---
+
+## Quick Reference
+
+| Task | Command |
+|------|---------|
+| Start App | `streamlit run app.py` |
+| View History | `git log --oneline` |
+| Check Tags | `git tag -l` |
+| Create Backup | `git bundle create backup.bundle --all` |
+| Export Data | View CSV files in `data/` folder |
+| Reset Data | `git checkout <commit> -- data/` |
