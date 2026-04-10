@@ -6,9 +6,9 @@ and body/paint garage in Chachoengsao, Thailand.
 This repository documents the full evolution of the garage's internal
 operations system:
 
--   **v1.5 -- VBA + Excel** *(current production system)*
--   **v2.0 -- Streamlit Phase 1** *(modernized web interface --
-    recommended)*
+- **v2.0.0-streamlit-phase1** (Current Recommended) — Modern Streamlit web app with clean ETL, stock tracking, mechanic audit trail, and Git versioning.
+- **v1.5.0-vba** — Original working Excel + VBA macros (daily production use).
+- **v1.0.0-original** — Early AI + LINE bot + Supabase pipeline (reference only).
 
 ------------------------------------------------------------------------
 
