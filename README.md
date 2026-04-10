@@ -1,4 +1,4 @@
-# AUS Auto Service - Inventory Management System
+# SP Autoservice - Inventory Management System
 
 A comprehensive inventory and material management system for mechanical spare parts operations, built with **Streamlit**, **Pandas**, and **Git-based versioning**.
 
