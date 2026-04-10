@@ -1,5 +1,22 @@
+# Virtual environments
+venv/
+venv-streamlit-phase1/
+.env
+
+# Python cache
 __pycache__/
 *.pyc
-venv/
-.env
+*.pyo
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Data backups (optional - keep only if you want)
+# data/backup/
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Temporary upload files
 data/upload_*.xlsx

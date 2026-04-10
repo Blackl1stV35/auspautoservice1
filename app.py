@@ -114,14 +114,14 @@ if page == "🏠 หน้าหลัก":
                      labels={"quantity": "จำนวนรวม", "material_name": "วัสดุ"})
         fig.update_layout(yaxis=dict(autorange="reversed"),
                           height=400, showlegend=False)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     if not low_stock.empty:
         st.subheader("⚠️ วัสดุใกล้หมด")
         st.dataframe(
             low_stock[["item_name", "current_qty"]].rename(
                 columns={"item_name": "วัสดุ", "current_qty": "คงเหลือ"}),
-            use_container_width=True, hide_index=True,
+            width="stretch", hide_index=True,
         )
 
 # ===================================================================
@@ -141,7 +141,7 @@ elif page == "📤 อัปโหลด Excel":
             "📄 ไฟล์ต้นทุน/สั่งซื้อ", type=["xlsx", "xls"],
             key="pur_upload")
 
-    if st.button("🚀 ประมวลผล ETL", type="primary", use_container_width=True):
+    if st.button("🚀 ประมวลผล ETL", type="primary", width="stretch"):
         if not req_file and not pur_file:
             st.error("กรุณาอัปโหลดไฟล์อย่างน้อย 1 ไฟล์")
         else:
@@ -212,7 +212,7 @@ elif page == "📝 เบิกวัสดุ":
             f"**{selected_mat}** จำนวน **{quantity}** ชิ้น")
 
         if st.button("✅ ยืนยันเบิกวัสดุ", type="primary",
-                     use_container_width=True):
+                     width="stretch"):
             try:
                 ds.issue_material(selected_emp, selected_mat,
                                   quantity, issued_by)
@@ -261,7 +261,7 @@ elif page == "📦 สต็อกวัสดุ":
             display[cols_show]
                 .rename(columns=rename_map)
                 .style.apply(highlight_low, axis=1),
-            use_container_width=True, hide_index=True, height=500,
+            width="stretch", hide_index=True, height=500,
         )
 
         # --- Receive stock sub-form ---
@@ -301,13 +301,13 @@ elif page == "📊 รายงานช่าง":
             usage = (req.groupby("employee_name")["quantity"]
                         .sum().sort_values(ascending=False).reset_index())
             usage.columns = ["ชื่อช่าง", "จำนวนเบิกรวม"]
-            st.dataframe(usage, use_container_width=True, hide_index=True)
+            st.dataframe(usage, width="stretch", hide_index=True)
 
             fig = px.bar(usage.head(15), x="ชื่อช่าง", y="จำนวนเบิกรวม",
                          color="จำนวนเบิกรวม",
                          color_continuous_scale="Reds")
             fig.update_layout(height=400)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
         else:
             selected = st.selectbox("เลือกช่าง", emp_names)
             emp_req = req[req["employee_name"] == selected]
@@ -316,11 +316,11 @@ elif page == "📊 รายงานช่าง":
             by_mat.columns = ["วัสดุ", "จำนวน"]
 
             st.metric("จำนวนเบิกทั้งหมด", int(by_mat["จำนวน"].sum()))
-            st.dataframe(by_mat, use_container_width=True, hide_index=True)
+            st.dataframe(by_mat, width="stretch", hide_index=True)
 
             fig = px.pie(by_mat.head(10), values="จำนวน", names="วัสดุ",
                          title=f"สัดส่วนวัสดุที่ {selected} เบิก")
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
 # ===================================================================
 # PAGE: ตรวจจับความผิดปกติ
@@ -340,7 +340,7 @@ elif page == "⚠️ ตรวจจับความผิดปกติ":
         display_anom = anomalies.copy()
         display_anom.columns = ["ชื่อช่าง", "จำนวนเบิกรวม", "Z-Score"]
         display_anom["Z-Score"] = display_anom["Z-Score"].round(2)
-        st.dataframe(display_anom, use_container_width=True, hide_index=True)
+        st.dataframe(display_anom, width="stretch", hide_index=True)
 
     # Comparison chart across all employees
     req = st.session_state["requisitions"]
@@ -354,7 +354,7 @@ elif page == "⚠️ ตรวจจับความผิดปกติ":
         fig.add_hline(y=mean_val, line_dash="dash", line_color="red",
                       annotation_text=f"ค่าเฉลี่ย ({mean_val:.0f})")
         fig.update_layout(height=400)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
 # ===================================================================
 # PAGE: ประวัติการใช้งาน (Audit Log)
@@ -368,7 +368,7 @@ elif page == "🔍 ประวัติการใช้งาน":
     else:
         audit_display = audit.sort_values("timestamp", ascending=False).head(100)
         audit_display.columns = ["เวลา", "ผู้ใช้", "การกระทำ", "รายละเอียด"]
-        st.dataframe(audit_display, use_container_width=True,
+        st.dataframe(audit_display, width="stretch",
                      hide_index=True, height=600)
 
     # Purchase history from Excel import
@@ -391,5 +391,5 @@ elif page == "🔍 ประวัติการใช้งาน":
             display_pur.rename(
                 columns={c: col_rename[c] for c in cols if c in col_rename},
                 inplace=True)
-            st.dataframe(display_pur, use_container_width=True,
+            st.dataframe(display_pur, width="stretch",
                          hide_index=True, height=400)
