@@ -1,6 +1,46 @@
+<<<<<<< HEAD
 __pycache__/
 *.pyc
 venv/
 .env
 data/upload_*.xlsx
 __init__.py
+=======
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Data Files (Crucial: Protects your company's actual Excel/CSV files)
+data/*
+!data/.keep
+
+# Logs and Databases
+*.log
+pipeline.log
+*.sqlite3
+
+# Python Cache & Compiled Files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# IDE / OS specific files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Docker
+.dockerignore
+
+# Supabase
+supabase/*
+
+# Steamlit
+.streamlit/
+>>>>>>> 879dea7dcbb7a4bcd718cbfeb898016608afe155
