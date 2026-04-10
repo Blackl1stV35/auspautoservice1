@@ -1,171 +1,200 @@
-<<<<<<< HEAD
-# 🔧 SP Auto Service — ระบบจัดการวัสดุสิ้นเปลือง
+# 🚗 SP Auto Service Management System
 
-ระบบ Streamlit สำหรับ **อู่เอสพี ออโต้เซอร์วิส** จ.ฉะเชิงเทรา  
-แทนที่การจัดการ Excel ด้วยมือ ด้วยระบบเบิก-จ่ายวัสดุแบบดิจิทัล
+**Modernizing SP Auto Service Co., Ltd.** --- an independent auto repair
+and body/paint garage in Chachoengsao, Thailand.
 
-## ⚡ Quick Start
+This repository documents the full evolution of the garage's internal
+operations system:
 
-```bash
-# 1. Clone & เข้าโฟลเดอร์
-git clone <your-repo-url>
-cd sp-autoservice
+-   **v1.5 -- VBA + Excel** *(current production system)*
+-   **v2.0 -- Streamlit Phase 1** *(modernized web interface --
+    recommended)*
 
-# 2. สร้าง virtual environment
+------------------------------------------------------------------------
+
+# 📋 Project Overview
+
+SP Auto Service processes **100+ vehicles per day** with a workforce of
+**40--60 technicians and staff**.\
+The previous manual Excel workflow for **consumables issuance and
+purchase/cost tracking** was slow, difficult to audit, and vulnerable to
+waste or misuse.
+
+This repository introduces a structured modernization path.
+
+### What this repository provides
+
+**Phase 1 -- Active System** - Clean **Streamlit web application** -
+Automated **ETL pipeline** for the original Excel data sources - Digital
+**consumable issuance system** - **Stock management** dashboard -
+**Per-mechanic usage tracking** - Basic **anomaly detection for unusual
+consumption**
+
+**Original Pipeline (Legacy but included)**
+
+The original architecture is still included for reference and
+experimentation:
+
+-   AI consumption analysis
+-   LINE Bot interface
+-   Supabase database integration
+
+------------------------------------------------------------------------
+
+# 🚀 Quick Start (Recommended -- Streamlit Phase 1)
+
+Clone and run the modern web interface locally.
+
+``` bash
+# 1. Clone the repository
+git clone https://github.com/Blackl1stV35/auspautoservice1.git
+cd auspautoservice1
+
+# 2. Create a virtual environment
 python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
 
-# 3. ติดตั้ง dependencies
+# Windows
+venv\Scripts\activate
+
+# macOS / Linux
+source venv/bin/activate
+
+# 3. Install dependencies
 pip install -r requirements.txt
 
-# 4. รันแอป
+# 4. Run the Streamlit app
 streamlit run app.py
 ```
 
-เปิดเบราว์เซอร์ไปที่ `http://localhost:8501`
+Then open your browser:
 
-## 📁 โครงสร้างโปรเจค
+    http://localhost:8501
 
-```
-sp-autoservice/
-├── app.py                  # Streamlit main app
-├── src/
-│   ├── etl.py              # ETL pipeline (Excel → CSV)
-│   └── data_store.py       # CSV CRUD + Git commit
-├── data/                   # CSV data (auto-generated, git-tracked)
-├── .streamlit/config.toml  # Streamlit config
-├── requirements.txt
-└── README.md
-```
+------------------------------------------------------------------------
 
-## 🔄 วิธีใช้งาน
+# 📁 Project Structure
 
-1. **อัปโหลด Excel** — ใช้เมนู "อัปโหลด Excel" นำไฟล์ Excel เดิม 2 ไฟล์เข้าระบบ
-2. **เบิกวัสดุ** — เลือกชื่อช่าง → เลือกวัสดุ → ใส่จำนวน → ยืนยัน
-3. **ดูสต็อก** — ตรวจสอบสต็อกปัจจุบัน รับวัสดุเข้าสต็อกได้
-4. **รายงาน** — ดูสถิติการเบิกรายช่าง ตรวจจับความผิดปกติ
+    auspautoservice1/
+    │
+    ├── app.py                    # Main Streamlit application (Phase 1)
+    ├── .streamlit/               # Streamlit configuration
+    ├── data/                     # CSV/Parquet datasets (auto-managed)
+    ├── src/                      # ETL pipeline and utility modules
+    ├── v1-vba/                   # Original Excel + VBA system (planned archive)
+    │
+    ├── run_etl.py                # Legacy ETL pipeline
+    ├── run_api.py                # Legacy API service
+    │
+    ├── requirements.txt
+    ├── README.md
+    └── .gitignore
 
-## 📝 หมายเหตุ
+------------------------------------------------------------------------
 
-- ข้อมูลทั้งหมดเก็บเป็น CSV ใน `data/`
-- ทุกการเปลี่ยนแปลงจะ commit อัตโนมัติไปยัง Git
-- รองรับภาษาไทยทั้งระบบ
-- ใช้ได้บนมือถือ/แท็บเล็ต
+# 🔄 How the System Works (Streamlit Phase 1)
 
-## 🗺️ Phase 2 (อนาคต)
+### 1️⃣ Upload Excel Data
 
-- Barcode/QR Scanner
-- LINE Bot แจ้งเตือน
-- Supabase cloud database
-=======
-<div align="center">
+Upload the original operational spreadsheets:
 
-# 🚗 Auto Shop AI & Data Pipeline
+-   **สถิติเบิกวัสดุ** (Consumables issuance statistics)
+-   **ต้นทุนแผนกสี** (Paint department cost tracking)
 
-**A production-ready Data Engineering and Machine Learning pipeline for automotive shop inventory and cost management.**
+The system automatically cleans and converts them into structured
+datasets.
 
-[![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
-[![Supabase](https://img.shields.io/badge/Supabase-PostgreSQL-3ECF8E?style=flat-square&logo=supabase&logoColor=white)](https://supabase.com/)
-[![Metabase](https://img.shields.io/badge/Metabase-Analytics-509EE3?style=flat-square&logo=metabase&logoColor=white)](https://www.metabase.com/)
+------------------------------------------------------------------------
 
-*Transitioning legacy Excel-based workflows into a scalable, cloud-hosted relational database with AI-driven insights.*
+### 2️⃣ Issue Consumables
 
-</div>
+Mechanics can digitally request materials:
 
----
+1.  Select **mechanic**
+2.  Select **material**
+3.  Enter **quantity**
+4.  Submit request
 
-## 📖 Overview
+Each transaction is logged with a **complete audit trail**.
 
-This project modernizes an automotive shop's operational data management by replacing manual Excel workflows with a robust, automated pipeline. It features a real-time LINE Messaging Bot for floor mechanics, Automated AI Data Extraction, and advanced Machine Learning for demand forecasting and cost optimization.
+------------------------------------------------------------------------
 
----
+### 3️⃣ Stock Management
 
-## ✨ Features
+The system tracks:
 
-### 1. Automated ETL Pipeline (`src/workers/etl.py`)
-- Ingests messy, historical Excel sheets using CPU Multi-Processing.
-- Cleans Thai dates, extracts numerical quantities from strings, and normalizes tabular structures.
-- Multithreaded chunking for rapid upload to Supabase PostgreSQL.
+-   Current inventory levels
+-   Low-stock alerts
+-   New purchase entries
+-   Historical usage patterns
 
-### 2. Real-Time LINE Bot Integration (`src/api/bot.py` & `src/nlp/nlp_engine.py`)
-- Mechanics can request materials via text or **Voice Memos** directly on LINE.
-- Uses **Groq (Whisper-large-v3)** for rapid Thai Speech-to-Text.
-- Uses local **Ollama (Typhoon 3B)** to extract structured JSON (Employee, Material, Quantity) from natural language.
+------------------------------------------------------------------------
 
-### 3. Machine Learning Engine (`src/workers/ai_engine.py`)
-- **Anomaly Detection:** Scikit-Learn's *Isolation Forest* detects suspicious historical price gouging from suppliers.
-- **Demand Forecasting:** *Linear Regression* predicts 7-day future material requirements based on historical burn rates.
-- **Cost Optimization:** Automatically evaluates and tags the most cost-effective suppliers.
+### 4️⃣ Reports & Monitoring
 
-### 4. Metabase BI Dashboard
-- Dockerized local Metabase instance connected to the Supabase cloud via Supavisor pooler.
-- Visualizes live requisition feeds, purchase spend over time, and dedicated AI Insights.
+Managers can view:
 
----
+-   Per-mechanic material consumption
+-   Top-used consumables
+-   Early anomaly detection for unusual usage
 
-## 🚀 Quick Start Guide
+------------------------------------------------------------------------
 
-### 1. Environment Setup
+### 5️⃣ Automatic Git Versioning
 
-Install the required dependencies (Python 3.12 compatible):
+Every change to the data layer is automatically tracked via **Git**,
+enabling:
 
-```bash
-python -m pip install --upgrade pip setuptools wheel
-pip install -r requirements.txt
-```
+-   Full audit history
+-   Data recovery
+-   Operational transparency
 
-Set up your `.env` file with your API keys:
+------------------------------------------------------------------------
 
-```env
-SUPABASE_URL="https://your-url.supabase.co"
-SUPABASE_KEY="your-service-role-key"
-LINE_CHANNEL_ACCESS_TOKEN="your-line-token"
-LINE_CHANNEL_SECRET="your-line-secret"
-GROQ_API_KEY="your-groq-key"
-```
+# 🗺️ Development Roadmap
 
-### 2. Database Preparation
+### Phase 1 -- Current
 
-To wipe the database and start fresh (if necessary):
+-   Streamlit MVP
+-   ETL pipeline for Excel files
+-   Git-based version tracking
 
-```bash
-python reset_db.py
-```
+### Phase 2 -- Operations Enhancement
 
-### 3. Run the Architecture (Decoupled Services)
+-   Barcode scanner support
+-   Improved anomaly detection
+-   Faster data ingestion
 
-**A. Start Local AI (Ollama) in the background:**
+### Phase 3 -- Communication Layer
 
-```bash
-ollama run scb10x/llama3.2-typhoon2-3b-instruct:latest
-```
+-   LINE Bot integration
+-   Voice and text material requests
+-   Supabase cloud database
 
-**B. Start the 24/7 API Server:**
+### Phase 4 -- Intelligence Layer
 
-```bash
-python run_api.py
-```
+-   AI forecasting for material demand
+-   Automated procurement suggestions
+-   Metabase operational dashboards
 
-> Expose to LINE via Ngrok: `ngrok http 8000`
+------------------------------------------------------------------------
 
-**C. Run the Heavy Data Workers (when needed):**
+# 📝 Design Principles
 
-```bash
-# Load Excel Data
-python run_etl.py
+The system is designed with the real garage environment in mind:
 
-# Run AI Analysis
-python run_ai.py
-```
+-   **Mobile-friendly UI** for mechanics and supervisors
+-   **Minimal training required**
+-   **Full audit trail for accountability**
+-   **Automatic Git backups** for operational safety
 
-### 4. Launch Metabase
+Legacy scripts remain available for teams experimenting with the full AI
+pipeline.
 
-Deploy the Metabase container using Docker:
+------------------------------------------------------------------------
 
-```bash
-docker-compose up -d
-```
+# 🏢 Organization
 
-Access your dashboards at `http://localhost:3001`.
->>>>>>> 879dea7dcbb7a4bcd718cbfeb898016608afe155
+**SP Auto Service Co., Ltd.**\
+Chachoengsao, Thailand
+
+*Last Updated: April 2026*
