@@ -335,4 +335,25 @@ def run_full_etl(req_file: str = None, pur_file: str = None) -> dict:
     if not os.path.exists(audit_path):
         pd.DataFrame(columns=["timestamp", "user", "action", "detail"]).to_csv(audit_path, index=False)
 
+    # Auto-commit all ETL output to Git
+    _etl_git_commit(result)
+
     return result
+
+
+def _etl_git_commit(result: dict):
+    """Commit ETL output to Git (self-contained, no circular import)."""
+    import subprocess
+    try:
+        root = os.path.dirname(DATA_DIR)
+        subprocess.run(["git", "add", "data/"], cwd=root,
+                       capture_output=True, timeout=10)
+        counts = ", ".join(f"{k}={len(v)}" for k, v in result.items()
+                           if hasattr(v, "__len__"))
+        subprocess.run(
+            ["git", "commit", "-m", f"ETL: {counts}"],
+            cwd=root, capture_output=True, timeout=10,
+        )
+        logger.info("ETL git commit OK")
+    except Exception as e:
+        logger.warning(f"ETL git commit skipped: {e}")
