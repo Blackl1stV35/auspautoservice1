@@ -4,3 +4,4 @@ venv/
 .env
 data/upload_*.xlsx
 .streamlit/secrets.toml
+venv-streamlit-phase1/
