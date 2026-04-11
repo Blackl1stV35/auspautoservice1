@@ -335,25 +335,37 @@ def run_full_etl(req_file: str = None, pur_file: str = None) -> dict:
     if not os.path.exists(audit_path):
         pd.DataFrame(columns=["timestamp", "user", "action", "detail"]).to_csv(audit_path, index=False)
 
-    # Auto-commit all ETL output to Git
+    # Auto-commit all ETL output to Git (reuses the robust git_commit
+    # from data_store which handles init, user config, -A flag, etc.)
     _etl_git_commit(result)
 
     return result
 
 
 def _etl_git_commit(result: dict):
-    """Commit ETL output to Git (self-contained, no circular import)."""
-    import subprocess
+    """Commit ETL output via data_store.git_commit for consistency."""
     try:
-        root = os.path.dirname(DATA_DIR)
-        subprocess.run(["git", "add", "data/"], cwd=root,
-                       capture_output=True, timeout=10)
+        from src.data_store import git_commit
         counts = ", ".join(f"{k}={len(v)}" for k, v in result.items()
                            if hasattr(v, "__len__"))
-        subprocess.run(
-            ["git", "commit", "-m", f"ETL: {counts}"],
-            cwd=root, capture_output=True, timeout=10,
-        )
+        ok = git_commit(f"ETL: {counts}")
+        if ok:
+            logger.info("ETL git commit OK")
+        else:
+            logger.warning("ETL git commit returned False")
+    except ImportError:
+        # Fallback if data_store can't be imported (standalone ETL run)
+        import subprocess
+        try:
+            root = os.path.dirname(DATA_DIR)
+            subprocess.run(["git", "add", "-A", "data/"], cwd=root,
+                           capture_output=True, timeout=15)
+            counts = ", ".join(f"{k}={len(v)}" for k, v in result.items()
+                               if hasattr(v, "__len__"))
+            subprocess.run(["git", "commit", "-m", f"ETL: {counts}"],
+                           cwd=root, capture_output=True, timeout=15)
+        except Exception as e:
+            logger.warning(f"ETL git commit fallback failed: {e}")
         logger.info("ETL git commit OK")
     except Exception as e:
         logger.warning(f"ETL git commit skipped: {e}")

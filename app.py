@@ -185,8 +185,9 @@ elif page == "📤 อัปโหลด Excel":
                     result = run_full_etl(req_path, pur_path)  # auto-commits internally
                     refresh_data()
                     ds.log_audit("admin", "ETL",
-                                 f"อัปโหลด req={bool(req_file)} pur={bool(pur_file)}",
-                                 commit=True)  # commit the audit entry too
+                                 f"อัปโหลด req={bool(req_file)} pur={bool(pur_file)}")
+                    # Explicit final commit to catch audit_log + any stragglers
+                    committed = ds.git_commit("ETL: อัปโหลดไฟล์ Excel + audit log")
                     st.markdown('<div class="success-box">✅ ประมวลผลสำเร็จ!</div>',
                                 unsafe_allow_html=True)
                     for key, label in [("requisitions", "รายการเบิก"),
@@ -195,7 +196,11 @@ elif page == "📤 อัปโหลด Excel":
                                        ("purchases", "รายการซื้อ")]:
                         if key in result and not result[key].empty:
                             st.success(f"📊 {label}: {len(result[key])} รายการ")
-                    st.caption("💾 บันทึกลง Git แล้ว")
+                    if committed:
+                        st.caption("💾 บันทึกลง Git เรียบร้อย")
+                    else:
+                        st.caption("⚠️ ข้อมูล CSV บันทึกแล้ว แต่ Git commit ไม่สำเร็จ "
+                                   "— ตรวจสอบว่าติดตั้ง Git แล้ว")
                 except Exception as e:
                     st.error(f"❌ เกิดข้อผิดพลาด: {e}")
 

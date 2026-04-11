@@ -128,46 +128,109 @@ def log_audit(user: str, action: str, detail: str, commit: bool = False):
         git_commit(f"audit: {action} — {detail[:60]}")
 
 
+def _run_git(args: list[str], root: str) -> subprocess.CompletedProcess:
+    """Run a git command and return the CompletedProcess. Logs debug info."""
+    cmd = ["git"] + args
+    logger.debug(f"Git command: {' '.join(cmd)}  cwd={root}")
+    result = subprocess.run(
+        cmd, cwd=root, capture_output=True, text=True, timeout=15,
+    )
+    if result.returncode != 0:
+        logger.debug(f"  rc={result.returncode}  "
+                     f"stdout={result.stdout.strip()!r}  "
+                     f"stderr={result.stderr.strip()!r}")
+    return result
+
+
+def _ensure_git_repo(root: str) -> bool:
+    """
+    Make sure `root` is a git repository with user identity configured.
+    Auto-initialises and configures if missing — the user should never
+    have to touch the terminal for git to work.
+    """
+    git_dir = os.path.join(root, ".git")
+    if not os.path.isdir(git_dir):
+        logger.info("No .git found — initialising repository automatically")
+        r = _run_git(["init"], root)
+        if r.returncode != 0:
+            logger.warning(f"git init failed: {r.stderr.strip()}")
+            return False
+
+    # Ensure user identity (git commit refuses without it)
+    for key, default in [("user.email", "sp-auto@local"),
+                         ("user.name",  "SP Auto Service")]:
+        check = _run_git(["config", key], root)
+        if check.returncode != 0 or not check.stdout.strip():
+            _run_git(["config", key, default], root)
+            logger.info(f"Auto-configured git {key} = {default}")
+
+    return True
+
+
 def git_commit(message: str) -> bool:
     """
-    Stage data/ and commit. Returns True on success, False on failure.
-    Never crashes the app — all errors are caught and logged.
+    Stage everything under data/ and commit.
+
+    Handles automatically:
+      • No .git yet → runs git init
+      • No user.email/name → auto-configures
+      • Untracked files → uses 'git add -A data/'
+      • Nothing to commit → returns True (not an error)
+
+    Returns True on success, False on genuine failure.
+    Never crashes the app.
     """
     try:
         root = os.path.dirname(DATA_DIR)
 
-        # Stage
-        add_result = subprocess.run(
-            ["git", "add", "data/"], cwd=root,
-            capture_output=True, text=True, timeout=10,
-        )
+        # 1. Ensure repo + identity exist
+        if not _ensure_git_repo(root):
+            return False
+
+        # 2. Stage — use -A to catch new, modified, AND deleted files
+        add_result = _run_git(["add", "-A", "data/"], root)
         if add_result.returncode != 0:
             logger.warning(f"git add failed: {add_result.stderr.strip()}")
             return False
 
-        # Commit
-        commit_result = subprocess.run(
-            ["git", "commit", "-m", message], cwd=root,
-            capture_output=True, text=True, timeout=10,
-        )
-        # returncode 1 with "nothing to commit" is not an error
+        # 3. Check if there is anything staged (avoids a misleading
+        #    "nothing to commit" failure on returncode 1)
+        status = _run_git(["status", "--porcelain", "data/"], root)
+        if status.returncode == 0 and not status.stdout.strip():
+            logger.info("Git: nothing to commit (data/ unchanged)")
+            return True  # no changes is still success
+
+        # 4. Commit
+        commit_result = _run_git(["commit", "-m", message], root)
         if commit_result.returncode == 0:
             logger.info(f"Git commit OK: {message}")
             return True
-        if "nothing to commit" in commit_result.stdout:
-            logger.info("Git: nothing to commit (no changes)")
+
+        # "nothing to commit" can also appear here on some git versions
+        combined = commit_result.stdout + commit_result.stderr
+        if "nothing to commit" in combined:
+            logger.info("Git: nothing to commit (confirmed)")
             return True
-        logger.warning(f"git commit failed: {commit_result.stderr.strip()}")
+
+        # Genuine failure — log full output for debugging
+        logger.warning(
+            f"git commit FAILED (rc={commit_result.returncode})\n"
+            f"  stdout: {commit_result.stdout.strip()}\n"
+            f"  stderr: {commit_result.stderr.strip()}"
+        )
         return False
 
     except FileNotFoundError:
-        logger.warning("Git not found on PATH — commits disabled")
+        logger.warning(
+            "Git executable not found on PATH. "
+            "Install Git from https://git-scm.com and restart the app."
+        )
         return False
     except subprocess.TimeoutExpired:
-        logger.warning("Git commit timed out")
+        logger.warning("Git commit timed out (>15s)")
         return False
     except Exception as e:
-        logger.warning(f"Git commit error: {e}")
+        logger.warning(f"Git commit unexpected error: {e}", exc_info=True)
         return False
 
 
