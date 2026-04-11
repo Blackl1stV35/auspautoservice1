@@ -182,11 +182,11 @@ elif page == "📤 อัปโหลด Excel":
 
             with st.spinner("⏳ กำลังประมวลผล..."):
                 try:
-                    result = run_full_etl(req_path, pur_path)
+                    result = run_full_etl(req_path, pur_path)  # auto-commits internally
                     refresh_data()
                     ds.log_audit("admin", "ETL",
-                                 f"อัปโหลด req={bool(req_file)} pur={bool(pur_file)}")
-                    ds.git_commit("ETL: อัปโหลดไฟล์ Excel ใหม่")
+                                 f"อัปโหลด req={bool(req_file)} pur={bool(pur_file)}",
+                                 commit=True)  # commit the audit entry too
                     st.markdown('<div class="success-box">✅ ประมวลผลสำเร็จ!</div>',
                                 unsafe_allow_html=True)
                     for key, label in [("requisitions", "รายการเบิก"),
@@ -195,6 +195,7 @@ elif page == "📤 อัปโหลด Excel":
                                        ("purchases", "รายการซื้อ")]:
                         if key in result and not result[key].empty:
                             st.success(f"📊 {label}: {len(result[key])} รายการ")
+                    st.caption("💾 บันทึกลง Git แล้ว")
                 except Exception as e:
                     st.error(f"❌ เกิดข้อผิดพลาด: {e}")
 
@@ -245,9 +246,13 @@ elif page == "📝 เบิกวัสดุ":
                                        quantity, issued_by)
             if result["ok"]:
                 refresh_data()
+                git_icon = "💾" if result.get("committed") else "⚠️"
+                git_text = ("บันทึกลง Git แล้ว" if result.get("committed")
+                            else "ข้อมูลบันทึกแล้ว แต่ Git commit ไม่สำเร็จ")
                 st.markdown(
                     f'<div class="success-box">{result["msg"]}</div>'
-                    f'<div class="tx-id">🔖 รหัสรายการ: {result["tx_id"]}</div>',
+                    f'<div class="tx-id">🔖 รหัส: {result["tx_id"]}  '
+                    f'{git_icon} {git_text}</div>',
                     unsafe_allow_html=True)
                 st.balloons()
             else:
@@ -341,9 +346,13 @@ elif page == "📦 สต็อกวัสดุ":
             add_user = st.text_input("ผู้รับเข้า", value="admin",
                                      key="add_stock_user")
         if st.button("✅ รับเข้าสต็อก", type="primary"):
-            ds.add_stock(add_mat, add_qty, add_user)
+            result = ds.add_stock(add_mat, add_qty, add_user)
             refresh_data()
-            st.success(f"✅ รับเข้า {add_mat} +{add_qty}")
+            if result and result.get("ok"):
+                git_icon = "💾" if result.get("committed") else "⚠️"
+                st.success(f"{result['msg']}  {git_icon}")
+            else:
+                st.warning(result.get("msg", "ไม่สามารถเพิ่มสต็อกได้"))
             st.rerun()
 
 
