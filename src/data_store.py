@@ -1,621 +1,616 @@
 """
-Data Store v2: CSV-based CRUD with automatic Git commits.
-Windows-compatible. Enhanced with:
-  - UUID-based transaction IDs
-  - Duplicate issuance prevention (time-window check)
-  - Monthly accumulation helpers (VBA "N+" style)
-  - Heatmap data builder
-  - Per-material anomaly detection
+Data Store v4: Supabase PostgreSQL — Performance-optimized.
+
+Key changes from v3:
+  • st.cache_data(ttl=60) on all read functions → sub-second page loads
+  • SQL views for heavy aggregations → no client-side groupby
+  • Lazy column selection → less data over the wire
+  • Cost & supplier analysis functions (new)
+  • sanitize_for_json for NaN-safe inserts (kept from v3)
 """
+import streamlit as st
 import pandas as pd
 import numpy as np
 import os
-import subprocess
 import uuid
+import math
 from datetime import datetime, timedelta
 import logging
-import threading
+from functools import lru_cache
 
 logger = logging.getLogger(__name__)
-DATA_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data"
-)
-
-# Cross-platform thread lock (replaces Unix-only fcntl)
-_file_lock = threading.Lock()
-
-# Duplicate-prevention window in seconds
 DUPLICATE_WINDOW_SECS = 120
+_CACHE_TTL = 60  # seconds — balance freshness vs speed
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Core I/O
+# Supabase connection (singleton, cached per process)
 # ═══════════════════════════════════════════════════════════════════
 
-def _ensure_data_dir():
-    os.makedirs(DATA_DIR, exist_ok=True)
-
-
-def _csv_path(name: str) -> str:
-    return os.path.join(DATA_DIR, f"{name}.csv")
-
-
-def load(name: str) -> pd.DataFrame:
-    """Load a CSV by table name. Returns empty DataFrame if missing."""
-    p = _csv_path(name)
-    if os.path.exists(p):
-        try:
-            return pd.read_csv(p)
-        except Exception as e:
-            logger.warning(f"Failed to read {p}: {e}")
-    return pd.DataFrame()
-
-
-def save(name: str, df: pd.DataFrame):
-    """Thread-safe write of DataFrame → CSV."""
-    _ensure_data_dir()
-    with _file_lock:
-        df.to_csv(_csv_path(name), index=False)
-
-
-def append_row(name: str, row: dict) -> pd.DataFrame:
-    """Append a single dict-row to a CSV and return updated DataFrame."""
-    with _file_lock:
-        df = load(name)
-        df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
-        _ensure_data_dir()
-        df.to_csv(_csv_path(name), index=False)
-    return df
-
-
-# ═══════════════════════════════════════════════════════════════════
-# Convenience loaders (public API used by app.py)
-# ═══════════════════════════════════════════════════════════════════
-
-def get_requisitions() -> pd.DataFrame:
-    """Requisitions with quantity guaranteed numeric."""
-    df = load("requisitions")
-    if not df.empty and "quantity" in df.columns:
-        df["quantity"] = pd.to_numeric(df["quantity"], errors="coerce").fillna(0).astype(int)
-    return df
-
-
-def get_employees() -> pd.DataFrame:
-    return load("employees")
-
-
-def get_materials() -> pd.DataFrame:
-    return load("materials")
-
-
-def get_stock() -> pd.DataFrame:
-    """Stock with current_qty guaranteed numeric."""
-    df = load("stock")
-    if not df.empty and "current_qty" in df.columns:
-        df["current_qty"] = pd.to_numeric(df["current_qty"], errors="coerce").fillna(0).astype(int)
-    return df
-
-
-def get_purchases() -> pd.DataFrame:
-    return load("purchases")
-
-
-def get_audit_log() -> pd.DataFrame:
-    return load("audit_log")
-
-
-# ═══════════════════════════════════════════════════════════════════
-# Audit & Git
-# ═══════════════════════════════════════════════════════════════════
-
-def log_audit(user: str, action: str, detail: str, commit: bool = False):
-    """
-    Append one row to audit_log.csv.
-    Args:
-        commit: If True, also git-commit immediately after writing.
-                Default False because callers like issue_material() /
-                add_stock() commit at the end of their own transaction.
-                Set True when log_audit is the *only* mutation in a flow
-                (e.g. standalone admin notes).
-    """
-    append_row("audit_log", {
-        "timestamp": datetime.now().isoformat(),
-        "user": user,
-        "action": action,
-        "detail": detail,
-    })
-    if commit:
-        git_commit(f"audit: {action} — {detail[:60]}")
-
-
-def _get_github_config() -> dict:
-    """
-    Read GitHub PAT + repo from Streamlit secrets or environment variables.
-    Supports both .streamlit/secrets.toml and os.environ fallback.
-
-    secrets.toml format:
-        [github]
-        token = "your_personal_access_token"
-        repo  = "username/repo-name"
-    """
-    token = None
-    repo  = None
-
-    # Try Streamlit secrets first
+def _get_supabase():
+    url = None
+    key = None
     try:
-        import streamlit as st
-        gh = st.secrets.get("github", {})
-        token = gh.get("token")
-        repo  = gh.get("repo")
+        sb = st.secrets.get("supabase", {})
+        url = sb.get("url")
+        key = sb.get("key")
     except Exception:
         pass
-
-    # Fallback to environment variables
-    if not token:
-        token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
-    if not repo:
-        repo = os.environ.get("GITHUB_REPO")
-
-    return {"token": token, "repo": repo}
-
-
-def _run_git(args: list[str], root: str,
-             env_override: dict = None) -> subprocess.CompletedProcess:
-    """Run a git command, log debug output, return CompletedProcess."""
-    cmd = ["git"] + args
-    # Merge env_override into a copy of the current environment
-    env = None
-    if env_override:
-        env = os.environ.copy()
-        env.update(env_override)
-
-    logger.debug(f"Git: {' '.join(cmd)}  cwd={root}")
-    result = subprocess.run(
-        cmd, cwd=root, capture_output=True, text=True,
-        timeout=30, env=env,
-    )
-    if result.returncode != 0:
-        logger.debug(f"  rc={result.returncode}  "
-                     f"stdout={result.stdout.strip()!r}  "
-                     f"stderr={result.stderr.strip()!r}")
-    return result
+    if not url:
+        url = os.environ.get("SUPABASE_URL")
+    if not key:
+        key = os.environ.get("SUPABASE_KEY")
+    if not url or not key:
+        raise RuntimeError("Supabase credentials not found in secrets.toml or env vars.")
+    url, key = str(url).strip(), str(key).strip()
+    if url.startswith("postgresql://") or url.startswith("postgres://"):
+        import re
+        m = re.search(r"postgres(?:ql)?://postgres\.([a-z0-9]+)", url)
+        if m:
+            url = f"https://{m.group(1)}.supabase.co"
+    if not url.startswith("https://"):
+        raise RuntimeError(f"URL must start with https://, got: {url[:50]}")
+    from supabase import create_client
+    return create_client(url, key)
 
 
-def _ensure_git_repo(root: str) -> bool:
-    """
-    Guarantee that `root` is a git repo with user identity configured
-    and the GitHub remote set (if a PAT is available).
-    Auto-creates everything the user would otherwise need to do manually.
-    """
-    git_dir = os.path.join(root, ".git")
-
-    # ── Init ──
-    if not os.path.isdir(git_dir):
-        logger.info("No .git found — running git init")
-        r = _run_git(["init"], root)
-        if r.returncode != 0:
-            logger.warning(f"git init failed: {r.stderr.strip()}")
-            return False
-        # Initial branch name
-        _run_git(["branch", "-M", "main"], root)
-
-    # ── User identity ──
-    for key, default in [("user.email", "sp-auto@local"),
-                         ("user.name",  "SP Auto Service")]:
-        chk = _run_git(["config", key], root)
-        if chk.returncode != 0 or not chk.stdout.strip():
-            _run_git(["config", key, default], root)
-            logger.info(f"Auto-set git {key} = {default}")
-
-    # ── Remote "origin" ──
-    gh = _get_github_config()
-    if gh["token"] and gh["repo"]:
-        remote_url = f"https://x-access-token:{gh['token']}@github.com/{gh['repo']}.git"
-
-        existing = _run_git(["remote", "get-url", "origin"], root)
-        if existing.returncode != 0:
-            # No remote yet — add it
-            _run_git(["remote", "add", "origin", remote_url], root)
-            logger.info(f"Added remote origin → {gh['repo']}")
-        elif gh["token"] not in existing.stdout:
-            # Remote exists but URL changed / token rotated — update it
-            _run_git(["remote", "set-url", "origin", remote_url], root)
-            logger.info("Updated remote origin URL with new token")
-
-    return True
+@lru_cache(maxsize=1)
+def _sb():
+    return _get_supabase()
 
 
-def git_commit(message: str):
-    """Robust git commit that works on Streamlit Cloud using PAT from secrets."""
+def _q(table: str):
+    return _sb().table(table)
+
+
+def db_status_info() -> dict:
     try:
-        import os
-        from subprocess import run, CalledProcessError
-
-        root = os.path.dirname(DATA_DIR)
-        pat = os.getenv("GITHUB_PAT") or os.getenv("GIT_TOKEN")
-
-        if not pat:
-            logger.warning("No GITHUB_PAT found in secrets - skipping git commit (Cloud mode)")
-            return False
-
-        # Configure git with PAT for HTTPS
-        run(["git", "config", "--global", "user.name", "Streamlit Cloud"], cwd=root, check=True)
-        run(["git", "config", "--global", "user.email", "streamlit@auspautoservice1.com"], cwd=root, check=True)
-
-        # Force add data/ (handles new or ignored files)
-        result = run(["git", "add", "-f", "data/"], cwd=root, capture_output=True, text=True)
-        if result.returncode != 0:
-            logger.warning(f"git add failed: {result.stderr}")
-
-        # Commit
-        result = run(["git", "commit", "-m", message], cwd=root, capture_output=True, text=True)
-        
-        if result.returncode == 0:
-            logger.info(f"Git commit successful: {message}")
-            
-            # Push using PAT
-            push_url = f"https://{pat}@github.com/Blackl1stV35/auspautoservice1.git"
-            push_result = run(["git", "push", push_url, "main"], cwd=root, capture_output=True, text=True)
-            
-            if push_result.returncode == 0:
-                logger.info("Git push to GitHub successful")
-                return True
-            else:
-                logger.error(f"Git push failed: {push_result.stderr}")
-                return False
-        else:
-            # No changes to commit is normal and not an error
-            if "nothing to commit" in result.stdout.lower() or "nothing to commit" in result.stderr.lower():
-                logger.info("No changes to commit")
-                return True
-            logger.warning(f"Git commit skipped: {result.stderr}")
-            return False
-
+        client = _sb()
+        raw_url = str(getattr(client, "supabase_url", ""))
+        project = None
+        if "supabase.co" in raw_url:
+            try:
+                project = raw_url.split("//")[1].split(".")[0]
+            except Exception:
+                project = raw_url[:40]
+        _q("employees").select("emp_id", count="exact").limit(1).execute()
+        return {"connected": True, "project": project, "tables_ok": True}
     except Exception as e:
-        logger.error(f"Git commit/push error: {e}")
-        return False
+        return {"connected": False, "project": None, "tables_ok": False,
+                "error": str(e)[:150]}
 
 
-def _git_push(root: str):
-    """
-    Push to origin/main. Best-effort: logs warnings but never raises.
-    Uses the PAT embedded in the remote URL (set by _ensure_git_repo).
-    """
-    gh = _get_github_config()
-    if not gh["token"] or not gh["repo"]:
-        logger.info("No GitHub token configured — skipping push "
-                     "(local commits only)")
-        return
+# ═══════════════════════════════════════════════════════════════════
+# Cached read functions — @st.cache_data with TTL
+# ═══════════════════════════════════════════════════════════════════
 
-    # Determine current branch name
-    branch_r = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], root)
-    branch = branch_r.stdout.strip() if branch_r.returncode == 0 else "main"
-
-    # Push with token (token is in the remote URL already)
-    push_r = _run_git(["push", "-u", "origin", branch], root)
-
-    if push_r.returncode == 0:
-        logger.info(f"Git push OK → origin/{branch}")
-    else:
-        stderr = push_r.stderr.strip()
-        # First push on empty remote needs --set-upstream; retry
-        if "has no upstream" in stderr or "set-upstream" in stderr:
-            retry = _run_git(["push", "--set-upstream", "origin", branch], root)
-            if retry.returncode == 0:
-                logger.info(f"Git push OK (set-upstream) → origin/{branch}")
-                return
-        logger.warning(f"Git push failed (non-fatal): {stderr}")
-
-
-def git_status_info() -> dict:
-    """
-    Return a dict with current git state for the UI sidebar.
-    Keys: initialized, has_remote, last_commit, branch, repo
-    """
-    root = os.path.dirname(DATA_DIR)
-    info = {"initialized": False, "has_remote": False,
-            "last_commit": None, "branch": None, "repo": None}
+@st.cache_data(ttl=_CACHE_TTL)
+def get_requisitions() -> pd.DataFrame:
     try:
-        git_dir = os.path.join(root, ".git")
-        if not os.path.isdir(git_dir):
-            return info
-        info["initialized"] = True
+        r = _q("requisitions").select(
+            "tx_id,employee_name,material_name,quantity,date,time,issued_by,month,year,sheet,created_at"
+        ).order("created_at", desc=True).execute()
+        df = pd.DataFrame(r.data) if r.data else pd.DataFrame()
+        if not df.empty and "quantity" in df.columns:
+            df["quantity"] = pd.to_numeric(df["quantity"], errors="coerce").fillna(0).astype(int)
+        return df
+    except Exception as e:
+        logger.warning(f"get_requisitions: {e}")
+        return pd.DataFrame()
 
-        br = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], root)
-        if br.returncode == 0:
-            info["branch"] = br.stdout.strip()
 
-        log = _run_git(["log", "-1", "--format=%s (%ar)"], root)
-        if log.returncode == 0:
-            info["last_commit"] = log.stdout.strip()
+@st.cache_data(ttl=_CACHE_TTL)
+def get_employees() -> pd.DataFrame:
+    try:
+        r = _q("employees").select("emp_id,name").order("name").execute()
+        return pd.DataFrame(r.data) if r.data else pd.DataFrame()
+    except Exception as e:
+        logger.warning(f"get_employees: {e}")
+        return pd.DataFrame()
 
-        remote = _run_git(["remote", "get-url", "origin"], root)
-        if remote.returncode == 0 and remote.stdout.strip():
-            info["has_remote"] = True
-            # Show repo name without token
-            url = remote.stdout.strip()
-            if "github.com/" in url:
-                info["repo"] = url.split("github.com/")[-1].replace(".git", "")
 
-    except Exception:
-        pass
-    return info
+@st.cache_data(ttl=_CACHE_TTL)
+def get_materials() -> pd.DataFrame:
+    try:
+        r = _q("materials").select("mat_id,item_name,category,unit,reorder_level").order("item_name").execute()
+        return pd.DataFrame(r.data) if r.data else pd.DataFrame()
+    except Exception as e:
+        logger.warning(f"get_materials: {e}")
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=_CACHE_TTL)
+def get_stock() -> pd.DataFrame:
+    try:
+        r = _q("stock").select("stock_id,item_name,current_qty,last_updated").order("item_name").execute()
+        df = pd.DataFrame(r.data) if r.data else pd.DataFrame()
+        if not df.empty and "current_qty" in df.columns:
+            df["current_qty"] = pd.to_numeric(df["current_qty"], errors="coerce").fillna(0).astype(int)
+        return df
+    except Exception as e:
+        logger.warning(f"get_stock: {e}")
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=_CACHE_TTL)
+def get_purchases() -> pd.DataFrame:
+    try:
+        r = _q("purchases").select("*").order("pur_id", desc=True).execute()
+        df = pd.DataFrame(r.data) if r.data else pd.DataFrame()
+        for c in ["total_amount", "price_per_unit", "quantity"]:
+            if c in df.columns:
+                df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
+        return df
+    except Exception as e:
+        logger.warning(f"get_purchases: {e}")
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=_CACHE_TTL)
+def get_audit_log() -> pd.DataFrame:
+    try:
+        r = _q("audit_log").select("*").order("timestamp", desc=True).limit(500).execute()
+        return pd.DataFrame(r.data) if r.data else pd.DataFrame()
+    except Exception as e:
+        logger.warning(f"get_audit_log: {e}")
+        return pd.DataFrame()
+
+
+def _invalidate_caches():
+    """Clear all st.cache_data caches after a write operation."""
+    for fn in [get_requisitions, get_employees, get_materials,
+               get_stock, get_purchases, get_audit_log,
+               get_monthly_cost, get_supplier_ranking,
+               get_price_history, get_category_cost,
+               get_cost_vs_usage]:
+        fn.clear()
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Transaction ID
+# Audit & Transaction ID
 # ═══════════════════════════════════════════════════════════════════
+
+def log_audit(user: str, action: str, detail: str, **_kw):
+    try:
+        _q("audit_log").insert({"user": user, "action": action, "detail": detail}).execute()
+    except Exception as e:
+        logger.warning(f"log_audit: {e}")
+
 
 def generate_tx_id() -> str:
-    """Unique transaction ID: SP-YYYYMMDD-HHMMSS-<short uuid>."""
     now = datetime.now()
-    short = uuid.uuid4().hex[:6].upper()
-    return f"SP-{now:%Y%m%d}-{now:%H%M%S}-{short}"
+    return f"SP-{now:%Y%m%d}-{now:%H%M%S}-{uuid.uuid4().hex[:6].upper()}"
 
 
 # ═══════════════════════════════════════════════════════════════════
 # Duplicate detection
 # ═══════════════════════════════════════════════════════════════════
 
-def check_duplicate(employee_name: str, material_name: str,
-                    quantity: int, window_secs: int = DUPLICATE_WINDOW_SECS) -> bool:
-    """
-    Return True if an identical (employee, material, quantity) row
-    already exists within the last `window_secs` seconds.
-    """
-    req = load("requisitions")
-    if req.empty or "date" not in req.columns or "time" not in req.columns:
-        return False
-
-    # Build timestamp from date+time columns
+def check_duplicate(emp: str, mat: str, qty: int, window: int = DUPLICATE_WINDOW_SECS) -> bool:
     try:
-        req["_ts"] = pd.to_datetime(
-            req["date"].astype(str) + " " + req["time"].astype(str),
-            errors="coerce",
-        )
+        cutoff = (datetime.utcnow() - timedelta(seconds=window)).isoformat()
+        r = (_q("requisitions").select("tx_id")
+             .eq("employee_name", emp).eq("material_name", mat)
+             .eq("quantity", qty).gte("created_at", cutoff).limit(1).execute())
+        return bool(r.data)
     except Exception:
         return False
 
-    cutoff = datetime.now() - timedelta(seconds=window_secs)
-    recent = req[
-        (req["employee_name"] == employee_name)
-        & (req["material_name"] == material_name)
-        & (req["quantity"].astype(int) == quantity)
-        & (req["_ts"] >= cutoff)
-    ]
-    return len(recent) > 0
-
 
 # ═══════════════════════════════════════════════════════════════════
-# Domain operations
+# Domain operations — write + invalidate
 # ═══════════════════════════════════════════════════════════════════
 
 def issue_material(employee_name: str, material_name: str, quantity: int,
-                   issued_by: str = "system",
-                   skip_dup_check: bool = False) -> dict:
-    """
-    Record a material issuance. Returns a result dict:
-        {"ok": True/False, "tx_id": "...", "msg": "..."}
-    """
-    # Validation
+                   issued_by: str = "system", skip_dup_check: bool = False) -> dict:
     if quantity <= 0:
-        return {"ok": False, "tx_id": None,
-                "msg": "จำนวนต้องมากกว่า 0"}
+        return {"ok": False, "tx_id": None, "committed": False, "msg": "จำนวนต้องมากกว่า 0"}
     if not employee_name or not material_name:
-        return {"ok": False, "tx_id": None,
-                "msg": "กรุณาเลือกชื่อช่างและวัสดุ"}
-
-    # Duplicate check
+        return {"ok": False, "tx_id": None, "committed": False, "msg": "กรุณาเลือกชื่อช่างและวัสดุ"}
     if not skip_dup_check and check_duplicate(employee_name, material_name, quantity):
-        return {"ok": False, "tx_id": None,
-                "msg": (f"⚠️ พบรายการซ้ำ: {employee_name} เบิก {material_name} "
-                        f"x{quantity} ภายใน {DUPLICATE_WINDOW_SECS} วินาทีที่ผ่านมา")}
-
+        return {"ok": False, "tx_id": None, "committed": False,
+                "msg": f"⚠️ พบรายการซ้ำภายใน {DUPLICATE_WINDOW_SECS} วินาที"}
     now = datetime.now()
     tx_id = generate_tx_id()
-
-    # 1. Append requisition
-    row = {
-        "tx_id": tx_id,
-        "req_id": tx_id,  # keep backward compat
-        "employee_name": employee_name,
-        "material_name": material_name,
-        "quantity": quantity,
-        "date": now.strftime("%Y-%m-%d"),
-        "time": now.strftime("%H:%M:%S"),
-        "issued_by": issued_by,
-        "month": now.month,
-        "year": now.year + 543,
-        "sheet": "app_entry",
-    }
-    append_row("requisitions", row)
-
-    # 2. Decrement stock
-    stock = load("stock")
-    if not stock.empty and "item_name" in stock.columns:
-        mask = stock["item_name"] == material_name
-        if mask.any():
-            stock["current_qty"] = pd.to_numeric(
-                stock["current_qty"], errors="coerce"
-            ).fillna(0)
-            stock.loc[mask, "current_qty"] -= quantity
-            stock.loc[mask, "last_updated"] = now.isoformat()
-            save("stock", stock)
-
-    # 3. Audit + Git
-    detail = f"{employee_name} เบิก {material_name} x{quantity} [{tx_id}]"
-    log_audit(issued_by, "เบิกวัสดุ", detail)
-    committed = git_commit(f"เบิก: {detail}")
-
-    return {"ok": True, "tx_id": tx_id, "committed": committed,
-            "msg": f"✅ สำเร็จ! {employee_name} เบิก {material_name} x{quantity}"}
+    try:
+        _q("requisitions").insert({
+            "tx_id": tx_id, "employee_name": employee_name,
+            "material_name": material_name, "quantity": quantity,
+            "date": now.strftime("%Y-%m-%d"), "time": now.strftime("%H:%M:%S"),
+            "issued_by": issued_by, "month": now.month, "year": now.year + 543,
+            "sheet": "app_entry",
+        }).execute()
+        # Decrement stock
+        sr = _q("stock").select("current_qty").eq("item_name", material_name).limit(1).execute()
+        if sr.data:
+            _q("stock").update({"current_qty": int(sr.data[0]["current_qty"]) - quantity,
+                                "last_updated": now.isoformat()}).eq("item_name", material_name).execute()
+        log_audit(issued_by, "เบิกวัสดุ", f"{employee_name} เบิก {material_name} x{quantity} [{tx_id}]")
+        _invalidate_caches()
+        return {"ok": True, "tx_id": tx_id, "committed": True,
+                "msg": f"✅ สำเร็จ! {employee_name} เบิก {material_name} x{quantity}"}
+    except Exception as e:
+        logger.error(f"issue_material: {e}")
+        return {"ok": False, "tx_id": tx_id, "committed": False, "msg": f"❌ {e}"}
 
 
 def add_stock(material_name: str, quantity: int, user: str = "system") -> dict:
-    """Add stock from purchase/receiving. Returns result dict."""
     if quantity <= 0:
         return {"ok": False, "committed": False, "msg": "จำนวนต้องมากกว่า 0"}
-    stock = load("stock")
-    now = datetime.now()
-
-    if stock.empty or "item_name" not in stock.columns:
-        stock = pd.DataFrame([{
-            "mat_id": 1, "item_name": material_name,
-            "current_qty": quantity, "last_updated": now.isoformat(),
-        }])
-    else:
-        mask = stock["item_name"] == material_name
-        if mask.any():
-            stock["current_qty"] = pd.to_numeric(
-                stock["current_qty"], errors="coerce"
-            ).fillna(0)
-            stock.loc[mask, "current_qty"] += quantity
-            stock.loc[mask, "last_updated"] = now.isoformat()
+    try:
+        now = datetime.now()
+        sr = _q("stock").select("current_qty").eq("item_name", material_name).limit(1).execute()
+        if sr.data:
+            _q("stock").update({"current_qty": int(sr.data[0]["current_qty"]) + quantity,
+                                "last_updated": now.isoformat()}).eq("item_name", material_name).execute()
         else:
-            new_id = (int(stock["mat_id"].max()) + 1
-                      if "mat_id" in stock.columns else 1)
-            stock = pd.concat([stock, pd.DataFrame([{
-                "mat_id": new_id, "item_name": material_name,
-                "current_qty": quantity, "last_updated": now.isoformat(),
-            }])], ignore_index=True)
-
-    save("stock", stock)
-    log_audit(user, "รับวัสดุเข้า", f"{material_name} +{quantity}")
-    committed = git_commit(f"รับเข้า: {material_name} +{quantity}")
-    return {"ok": True, "committed": committed,
-            "msg": f"✅ รับเข้า {material_name} +{quantity}"}
+            _q("stock").insert({"item_name": material_name, "current_qty": quantity,
+                                "last_updated": now.isoformat()}).execute()
+        log_audit(user, "รับวัสดุเข้า", f"{material_name} +{quantity}")
+        _invalidate_caches()
+        return {"ok": True, "committed": True, "msg": f"✅ รับเข้า {material_name} +{quantity}"}
+    except Exception as e:
+        return {"ok": False, "committed": False, "msg": f"❌ {e}"}
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Stock alerts
+# Stock helpers
 # ═══════════════════════════════════════════════════════════════════
 
 def get_low_stock(threshold: int = 10) -> pd.DataFrame:
-    stock = get_stock()
-    if stock.empty or "current_qty" not in stock.columns:
+    s = get_stock()
+    if s.empty or "current_qty" not in s.columns:
         return pd.DataFrame()
-    return stock[stock["current_qty"] <= threshold].sort_values("current_qty")
+    return s[s["current_qty"] <= threshold].sort_values("current_qty")
 
 
-def get_stock_status(row_qty: int) -> str:
-    """Return a Thai status label for a stock quantity."""
-    if row_qty <= 0:
-        return "🔴 หมด"
-    if row_qty <= 5:
-        return "🟠 วิกฤต"
-    if row_qty <= 10:
-        return "🟡 ต่ำ"
+def get_stock_status(qty: int) -> str:
+    if qty <= 0:  return "🔴 หมด"
+    if qty <= 5:  return "🟠 วิกฤต"
+    if qty <= 10: return "🟡 ต่ำ"
     return "🟢 ปกติ"
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Anomaly detection (enhanced: overall + per-material)
+# Anomaly detection
 # ═══════════════════════════════════════════════════════════════════
 
 def get_anomalies(z_threshold: float = 2.0) -> pd.DataFrame:
-    """Flag employees whose TOTAL usage is outlier."""
     req = get_requisitions()
     if req.empty or "employee_name" not in req.columns:
         return pd.DataFrame()
     usage = req.groupby("employee_name")["quantity"].sum().reset_index()
-    mean_q, std_q = usage["quantity"].mean(), usage["quantity"].std()
-    if std_q == 0 or pd.isna(std_q):
+    m, s = usage["quantity"].mean(), usage["quantity"].std()
+    if s == 0 or pd.isna(s):
         return pd.DataFrame()
-    usage["z_score"] = (usage["quantity"] - mean_q) / std_q
-    return (usage[usage["z_score"] > z_threshold]
-            .sort_values("z_score", ascending=False))
+    usage["z_score"] = (usage["quantity"] - m) / s
+    return usage[usage["z_score"] > z_threshold].sort_values("z_score", ascending=False)
 
 
 def get_anomalies_per_material(z_threshold: float = 2.0) -> pd.DataFrame:
-    """Flag employee×material pairs that are outliers within each material."""
     req = get_requisitions()
     if req.empty:
         return pd.DataFrame()
     pivot = req.groupby(["employee_name", "material_name"])["quantity"].sum().reset_index()
-    # Z-score within each material
     stats = pivot.groupby("material_name")["quantity"].agg(["mean", "std"]).reset_index()
     stats.columns = ["material_name", "mat_mean", "mat_std"]
     merged = pivot.merge(stats, on="material_name")
-    merged["z_score"] = np.where(
-        merged["mat_std"] > 0,
-        (merged["quantity"] - merged["mat_mean"]) / merged["mat_std"],
-        0,
-    )
-    flagged = merged[merged["z_score"] > z_threshold].sort_values("z_score", ascending=False)
-    return flagged[["employee_name", "material_name", "quantity", "z_score"]]
+    merged["z_score"] = np.where(merged["mat_std"] > 0,
+                                  (merged["quantity"] - merged["mat_mean"]) / merged["mat_std"], 0)
+    f = merged[merged["z_score"] > z_threshold].sort_values("z_score", ascending=False)
+    return f[["employee_name", "material_name", "quantity", "z_score"]]
 
 
 # ═══════════════════════════════════════════════════════════════════
 # Monthly accumulation (VBA "N+" style)
 # ═══════════════════════════════════════════════════════════════════
 
+def _add_period(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+    df = df.copy()
+    df["period"] = df.apply(
+        lambda r: f"{int(r['month']):02d}/{int(r['year'])}"
+        if pd.notna(r.get("month")) and pd.notna(r.get("year")) else "ไม่ระบุ", axis=1)
+    return df
+
+
 def get_monthly_summary() -> pd.DataFrame:
-    """
-    Pivot: rows = employee, columns = month-year, values = total qty.
-    Mimics the VBA monthly sheet accumulation.
-    """
-    req = get_requisitions()
+    req = _add_period(get_requisitions())
     if req.empty:
         return pd.DataFrame()
-    req["period"] = req.apply(
-        lambda r: f"{int(r['month']):02d}/{int(r['year'])}"
-        if pd.notna(r.get("month")) and pd.notna(r.get("year")) else "ไม่ระบุ",
-        axis=1,
-    )
-    pivot = req.pivot_table(
-        index="employee_name", columns="period",
-        values="quantity", aggfunc="sum", fill_value=0,
-    )
-    pivot["รวมทั้งหมด"] = pivot.sum(axis=1)
-    return pivot.sort_values("รวมทั้งหมด", ascending=False)
+    pv = req.pivot_table(index="employee_name", columns="period",
+                          values="quantity", aggfunc="sum", fill_value=0)
+    pv["รวมทั้งหมด"] = pv.sum(axis=1)
+    return pv.sort_values("รวมทั้งหมด", ascending=False)
 
 
 def get_monthly_by_material() -> pd.DataFrame:
-    """Pivot: rows = material, columns = month-year, values = total qty."""
-    req = get_requisitions()
+    req = _add_period(get_requisitions())
     if req.empty:
         return pd.DataFrame()
-    req["period"] = req.apply(
-        lambda r: f"{int(r['month']):02d}/{int(r['year'])}"
-        if pd.notna(r.get("month")) and pd.notna(r.get("year")) else "ไม่ระบุ",
-        axis=1,
-    )
-    pivot = req.pivot_table(
-        index="material_name", columns="period",
-        values="quantity", aggfunc="sum", fill_value=0,
-    )
-    pivot["รวมทั้งหมด"] = pivot.sum(axis=1)
-    return pivot.sort_values("รวมทั้งหมด", ascending=False)
-
-
-# ═══════════════════════════════════════════════════════════════════
-# Heatmap data
-# ═══════════════════════════════════════════════════════════════════
-
-def get_usage_heatmap() -> pd.DataFrame:
-    """
-    Pivot table: rows = employee, columns = material, values = total qty.
-    Used by Plotly imshow() for the usage-intensity heatmap.
-    """
-    req = get_requisitions()
-    if req.empty:
-        return pd.DataFrame()
-    pivot = req.pivot_table(
-        index="employee_name", columns="material_name",
-        values="quantity", aggfunc="sum", fill_value=0,
-    )
-    return pivot
+    pv = req.pivot_table(index="material_name", columns="period",
+                          values="quantity", aggfunc="sum", fill_value=0)
+    pv["รวมทั้งหมด"] = pv.sum(axis=1)
+    return pv.sort_values("รวมทั้งหมด", ascending=False)
 
 
 def get_available_periods() -> list[str]:
-    """Return sorted list of month/year periods present in requisitions."""
-    req = get_requisitions()
+    req = _add_period(get_requisitions())
     if req.empty:
         return []
-    req["period"] = req.apply(
-        lambda r: f"{int(r['month']):02d}/{int(r['year'])}"
-        if pd.notna(r.get("month")) and pd.notna(r.get("year")) else None,
-        axis=1,
-    )
-    periods = sorted(req["period"].dropna().unique().tolist())
-    return periods
+    return sorted(req["period"].dropna().unique().tolist())
+
+
+def get_usage_heatmap() -> pd.DataFrame:
+    req = get_requisitions()
+    if req.empty:
+        return pd.DataFrame()
+    return req.pivot_table(index="employee_name", columns="material_name",
+                            values="quantity", aggfunc="sum", fill_value=0)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ★ NEW: Cost & Supplier Analysis (uses SQL views for speed)
+# ═══════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=_CACHE_TTL)
+def get_monthly_cost() -> pd.DataFrame:
+    """Monthly cost summary from v_monthly_cost view."""
+    try:
+        r = _q("v_monthly_cost").select("*").execute()
+        df = pd.DataFrame(r.data) if r.data else pd.DataFrame()
+        for c in ["total_cost", "total_qty", "avg_unit_price"]:
+            if c in df.columns:
+                df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
+        return df
+    except Exception as e:
+        logger.warning(f"get_monthly_cost (view fallback): {e}")
+        # Fallback: compute from purchases table
+        pur = get_purchases()
+        if pur.empty or "purchase_date" not in pur.columns:
+            return pd.DataFrame()
+        pur["period"] = pd.to_datetime(pur["purchase_date"], errors="coerce").dt.strftime("%Y-%m")
+        return pur.groupby(["period", "sheet_category", "supplier_name"]).agg(
+            tx_count=("pur_id", "count"),
+            total_cost=("total_amount", "sum"),
+            total_qty=("quantity", "sum"),
+            avg_unit_price=("price_per_unit", "mean"),
+        ).reset_index()
+
+
+@st.cache_data(ttl=_CACHE_TTL)
+def get_supplier_ranking() -> pd.DataFrame:
+    """Supplier ranking from v_supplier_rank view."""
+    try:
+        r = _q("v_supplier_rank").select("*").execute()
+        df = pd.DataFrame(r.data) if r.data else pd.DataFrame()
+        for c in ["total_spend", "total_qty", "order_count"]:
+            if c in df.columns:
+                df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
+        return df
+    except Exception as e:
+        logger.warning(f"get_supplier_ranking (fallback): {e}")
+        pur = get_purchases()
+        if pur.empty:
+            return pd.DataFrame()
+        return pur.groupby("supplier_name").agg(
+            order_count=("pur_id", "count"),
+            total_spend=("total_amount", "sum"),
+            total_qty=("quantity", "sum"),
+            unique_items=("item_name", "nunique"),
+        ).reset_index().sort_values("total_spend", ascending=False)
+
+
+@st.cache_data(ttl=_CACHE_TTL)
+def get_price_history() -> pd.DataFrame:
+    """Price history with pct_change from v_price_history view."""
+    try:
+        r = _q("v_price_history").select("*").execute()
+        df = pd.DataFrame(r.data) if r.data else pd.DataFrame()
+        for c in ["price_per_unit", "prev_price", "pct_change"]:
+            if c in df.columns:
+                df[c] = pd.to_numeric(df[c], errors="coerce")
+        return df
+    except Exception as e:
+        logger.warning(f"get_price_history (fallback): {e}")
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=_CACHE_TTL)
+def get_category_cost() -> pd.DataFrame:
+    """Cost breakdown by category from v_category_cost view."""
+    try:
+        r = _q("v_category_cost").select("*").execute()
+        df = pd.DataFrame(r.data) if r.data else pd.DataFrame()
+        for c in ["total_cost", "avg_cost", "item_count"]:
+            if c in df.columns:
+                df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
+        return df
+    except Exception as e:
+        logger.warning(f"get_category_cost (fallback): {e}")
+        pur = get_purchases()
+        if pur.empty:
+            return pd.DataFrame()
+        return pur.groupby("sheet_category").agg(
+            item_count=("pur_id", "count"),
+            total_cost=("total_amount", "sum"),
+            avg_cost=("total_amount", "mean"),
+        ).reset_index().sort_values("total_cost", ascending=False)
+
+
+@st.cache_data(ttl=_CACHE_TTL)
+def get_cost_vs_usage() -> pd.DataFrame:
+    """Purchased vs issued comparison from v_cost_vs_usage view."""
+    try:
+        r = _q("v_cost_vs_usage").select("*").execute()
+        df = pd.DataFrame(r.data) if r.data else pd.DataFrame()
+        for c in ["purchased_qty", "purchase_cost", "issued_qty", "current_stock"]:
+            if c in df.columns:
+                df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
+        return df
+    except Exception as e:
+        logger.warning(f"get_cost_vs_usage: {e}")
+        return pd.DataFrame()
+
+
+def get_price_spikes(threshold_pct: float = 30.0) -> pd.DataFrame:
+    """Items with price increase > threshold_pct from previous purchase."""
+    ph = get_price_history()
+    if ph.empty or "pct_change" not in ph.columns:
+        return pd.DataFrame()
+    spikes = ph[ph["pct_change"] > threshold_pct].sort_values("pct_change", ascending=False)
+    return spikes[["item_name", "supplier_name", "purchase_date",
+                    "prev_price", "price_per_unit", "pct_change"]].head(50)
+
+
+def get_cost_kpis() -> dict:
+    """Quick KPI dict for the cost page header cards."""
+    pur = get_purchases()
+    if pur.empty:
+        return {"total_spend": 0, "ytd_spend": 0, "avg_daily": 0,
+                "top_drivers": [], "this_month": 0}
+    pur["total_amount"] = pd.to_numeric(pur["total_amount"], errors="coerce").fillna(0)
+    total = pur["total_amount"].sum()
+
+    # This month
+    now = datetime.now()
+    pur["purchase_date"] = pd.to_datetime(pur["purchase_date"], errors="coerce")
+    this_month = pur[
+        (pur["purchase_date"].dt.month == now.month) &
+        (pur["purchase_date"].dt.year == now.year)
+    ]["total_amount"].sum()
+
+    # YTD
+    ytd = pur[pur["purchase_date"].dt.year == now.year]["total_amount"].sum()
+
+    # Avg daily
+    date_range = (pur["purchase_date"].max() - pur["purchase_date"].min()).days
+    avg_daily = total / max(date_range, 1)
+
+    # Top 3 cost drivers
+    top3 = (pur.groupby("sheet_category")["total_amount"].sum()
+            .nlargest(3).reset_index().values.tolist())
+
+    return {"total_spend": total, "ytd_spend": ytd, "avg_daily": avg_daily,
+            "top_drivers": top3, "this_month": this_month}
+
+
+def get_cost_forecast() -> pd.DataFrame:
+    """Simple monthly cost forecast using 3-month moving average."""
+    mc = get_monthly_cost()
+    if mc.empty or "total_cost" not in mc.columns:
+        return pd.DataFrame()
+    monthly = mc.groupby("period")["total_cost"].sum().reset_index().sort_values("period")
+    if len(monthly) < 3:
+        return monthly
+    monthly["forecast"] = monthly["total_cost"].rolling(3, min_periods=1).mean().shift(1)
+    monthly["over_budget"] = monthly["total_cost"] > monthly["forecast"] * 1.2
+    return monthly
+
+
+# ═══════════════════════════════════════════════════════════════════
+# NaN sanitization for Supabase JSON inserts
+# ═══════════════════════════════════════════════════════════════════
+
+_NAN_DEFAULTS = {
+    "quantity": 0, "price_per_unit": 0, "total_amount": 0,
+    "amount_before_vat": 0, "discount_pct": 0, "reorder_level": 10,
+    "current_qty": 0, "month": 0, "year": 0,
+    "item_name": None, "supplier_name": None, "invoice_no": None,
+    "notes": None, "category": None, "sheet_category": None,
+    "purchase_date": None, "date": None, "time": None,
+}
+
+
+def sanitize_for_json(records: list[dict]) -> list[dict]:
+    fixed = 0
+    clean = []
+    for row in records:
+        out = {}
+        for k, v in row.items():
+            bad = False
+            if v is None:
+                pass
+            elif isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+                bad = True
+            elif isinstance(v, str) and v.strip().lower() in ("nan", "nat", "none", ""):
+                bad = True
+            elif hasattr(v, "item"):
+                try:
+                    pv = v.item()
+                    if isinstance(pv, float) and (math.isnan(pv) or math.isinf(pv)):
+                        bad = True
+                    else:
+                        v = pv
+                except Exception:
+                    pass
+            else:
+                try:
+                    if pd.isna(v):
+                        bad = True
+                except (TypeError, ValueError):
+                    pass
+            if bad:
+                v = _NAN_DEFAULTS.get(k)
+                fixed += 1
+            if hasattr(v, "item"):
+                v = v.item()
+            out[k] = v
+        clean.append(out)
+    if fixed:
+        logger.info(f"sanitize_for_json: fixed {fixed} NaN values in {len(records)} records")
+    return clean
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ETL bulk insert helpers
+# ═══════════════════════════════════════════════════════════════════
+
+def bulk_upsert_employees(names: list[str]):
+    for name in names:
+        if not name or (isinstance(name, float) and pd.isna(name)):
+            continue
+        try:
+            _q("employees").upsert({"name": str(name).strip()}, on_conflict="name").execute()
+        except Exception:
+            pass
+
+
+def bulk_upsert_materials(records: list[dict]):
+    for rec in sanitize_for_json(records):
+        if not rec.get("item_name"):
+            continue
+        try:
+            _q("materials").upsert(rec, on_conflict="item_name").execute()
+        except Exception:
+            pass
+
+
+def bulk_insert_requisitions(records: list[dict]):
+    records = sanitize_for_json(records)
+    for i in range(0, len(records), 200):
+        try:
+            _q("requisitions").upsert(records[i:i+200], on_conflict="tx_id").execute()
+        except Exception as e:
+            logger.warning(f"bulk_insert_requisitions batch {i}: {e}")
+
+
+def bulk_insert_purchases(records: list[dict]):
+    records = sanitize_for_json(records)
+    for i in range(0, len(records), 200):
+        try:
+            _q("purchases").insert(records[i:i+200]).execute()
+        except Exception as e:
+            logger.warning(f"bulk_insert_purchases batch {i}: {e}")
+
+
+def init_stock_from_materials():
+    try:
+        mats = _q("materials").select("item_name").execute()
+        existing = {r["item_name"] for r in (_q("stock").select("item_name").execute().data or [])}
+        for m in (mats.data or []):
+            if m["item_name"] not in existing:
+                _q("stock").insert({"item_name": m["item_name"], "current_qty": 0}).execute()
+    except Exception as e:
+        logger.warning(f"init_stock_from_materials: {e}")

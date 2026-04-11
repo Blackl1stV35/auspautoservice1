@@ -1,164 +1,90 @@
 """
-SP Auto Service - ระบบจัดการวัสดุสิ้นเปลือง Phase 1 (Enhanced)
+SP Auto Service v4 — ระบบจัดการวัสดุสิ้นเปลือง (Supabase + Cost Analysis)
 อู่เอสพี ออโต้เซอร์วิส จ.ฉะเชิงเทรา
-
-Enhancements over v1:
-  • Monthly vs cumulative dashboard views (VBA "N+" style)
-  • Usage-intensity heatmap (employee × material)
-  • Top-10 materials & top mechanics charts on home
-  • Tiered stock alerts with 🔴🟠🟡🟢 status
-  • UUID transaction IDs + duplicate prevention
-  • Per-material anomaly detection
 """
 import streamlit as st
 import pandas as pd
-import os
-import sys
+import os, sys
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from src.etl import run_full_etl, DATA_DIR
+from src.etl import run_full_etl, generate_clean_excel
 from src import data_store as ds
 
-# ─── Page config ──────────────────────────────────────────────────
-st.set_page_config(
-    page_title="SP Auto Service - ระบบวัสดุ",
-    page_icon="🔧",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
+DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 
-st.markdown("""
-<style>
-    /* Mobile-friendly sizing */
-    .stSelectbox label, .stNumberInput label, .stTextInput label {
-        font-size: 1.1rem !important; font-weight: 600 !important;
-    }
-    div[data-testid="stMetric"] {
-        background: #f8f9fa; border-radius: 10px; padding: 12px;
-        border-left: 4px solid #FF6B35;
-    }
-    .success-box {
-        background: #d4edda; padding: 1rem; border-radius: 8px;
-        margin: 0.5rem 0; border-left: 4px solid #28a745; font-size: 1.1rem;
-    }
-    .dup-box {
-        background: #fff3cd; padding: 1rem; border-radius: 8px;
-        margin: 0.5rem 0; border-left: 4px solid #ffc107; font-size: 1.1rem;
-    }
-    .tx-id { color: #6c757d; font-size: 0.85rem; }
-</style>
-""", unsafe_allow_html=True)
+st.set_page_config(page_title="SP Auto Service", page_icon="🔧",
+                   layout="wide", initial_sidebar_state="expanded")
 
-
-# ─── Data refresh helper ─────────────────────────────────────────
-def refresh_data():
-    st.session_state["requisitions"] = ds.get_requisitions()
-    st.session_state["employees"]    = ds.get_employees()
-    st.session_state["materials"]    = ds.get_materials()
-    st.session_state["stock"]        = ds.get_stock()
-    st.session_state["purchases"]    = ds.get_purchases()
-    st.session_state["audit_log"]    = ds.get_audit_log()
-
-
-if "initialized" not in st.session_state:
-    refresh_data()
-    st.session_state["initialized"] = True
-
+st.markdown("""<style>
+    .stSelectbox label,.stNumberInput label,.stTextInput label{font-size:1.1rem!important;font-weight:600!important}
+    div[data-testid="stMetric"]{background:#f8f9fa;border-radius:10px;padding:12px;border-left:4px solid #FF6B35}
+    .success-box{background:#d4edda;padding:1rem;border-radius:8px;margin:.5rem 0;border-left:4px solid #28a745;font-size:1.1rem}
+    .dup-box{background:#fff3cd;padding:1rem;border-radius:8px;margin:.5rem 0;border-left:4px solid #ffc107;font-size:1.1rem}
+    .tx-id{color:#6c757d;font-size:.85rem}
+</style>""", unsafe_allow_html=True)
 
 # ─── Sidebar ─────────────────────────────────────────────────────
 st.sidebar.image("https://img.icons8.com/color/96/car-service.png", width=64)
 st.sidebar.title("🔧 SP Auto Service")
-st.sidebar.caption("ระบบจัดการวัสดุสิ้นเปลือง v2.0")
+st.sidebar.caption("v4.0 — Supabase + Cost Analysis")
 
 page = st.sidebar.radio("เมนู", [
-    "🏠 หน้าหลัก",
-    "📤 อัปโหลด Excel",
-    "📝 เบิกวัสดุ",
-    "📦 สต็อกวัสดุ",
-    "📊 รายงานช่าง",
-    "🗓️ สรุปรายเดือน",
-    "🔥 Heatmap การใช้งาน",
-    "⚠️ ตรวจจับความผิดปกติ",
-    "🔍 ประวัติการใช้งาน",
-], index=0)
+    "🏠 หน้าหลัก", "📤 อัปโหลด Excel", "📝 เบิกวัสดุ", "📦 สต็อกวัสดุ",
+    "📊 รายงานช่าง", "🗓️ สรุปรายเดือน", "🔥 Heatmap การใช้งาน",
+    "💰 Cost & Supplier", "⚠️ ตรวจจับความผิดปกติ", "🔍 ประวัติการใช้งาน",
+])
 
 st.sidebar.divider()
-# ── Git status indicator ──
-_git = ds.git_status_info()
-if _git["initialized"]:
-    if _git["has_remote"]:
-        st.sidebar.caption(f"🟢 Git: {_git['repo'] or 'connected'}")
-    else:
-        st.sidebar.caption("🟡 Git: local only (ไม่มี remote)")
-    if _git["last_commit"]:
-        st.sidebar.caption(f"📝 {_git['last_commit']}")
-else:
-    st.sidebar.caption("⚪ Git: ยังไม่ได้ตั้งค่า (จะสร้างอัตโนมัติ)")
+_db = ds.db_status_info()
+st.sidebar.caption(f"{'🟢' if _db['connected'] else '🔴'} Supabase: {_db.get('project','ไม่เชื่อมต่อ')}")
 st.sidebar.caption(f"📅 {datetime.now().strftime('%d/%m/%Y %H:%M')}")
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 🏠 หน้าหลัก — Enhanced with top mechanics + materials side-by-side
+# 🏠 หน้าหลัก
 # ═══════════════════════════════════════════════════════════════════
 if page == "🏠 หน้าหลัก":
     st.title("🏠 ภาพรวมระบบ")
-    st.markdown("**อู่เอสพี ออโต้เซอร์วิส** — ระบบจัดการวัสดุสิ้นเปลือง")
+    req, emp, mat, stock = ds.get_requisitions(), ds.get_employees(), ds.get_materials(), ds.get_stock()
+    low = ds.get_low_stock()
 
-    req   = st.session_state["requisitions"]
-    emp   = st.session_state["employees"]
-    mat   = st.session_state["materials"]
-    stock = st.session_state["stock"]
-    low   = ds.get_low_stock()
-
-    # ── KPI row ──
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("👷 จำนวนช่าง",    len(emp)  if not emp.empty  else 0)
-    c2.metric("🧰 รายการวัสดุ",  len(mat)  if not mat.empty  else 0)
-    c3.metric("📋 รายการเบิก",   len(req)  if not req.empty  else 0)
-    c4.metric("⚠️ วัสดุใกล้หมด", len(low)  if not low.empty  else 0)
+    c1.metric("👷 ช่าง", len(emp) if not emp.empty else 0)
+    c2.metric("🧰 วัสดุ", len(mat) if not mat.empty else 0)
+    c3.metric("📋 เบิก", len(req) if not req.empty else 0)
+    c4.metric("⚠️ ใกล้หมด", len(low) if not low.empty else 0)
 
     if not req.empty and "material_name" in req.columns:
-        # ── Top-10 materials + Top-10 mechanics side by side ──
         st.divider()
         left, right = st.columns(2)
-
         with left:
             st.subheader("🏆 Top 10 วัสดุ")
-            top_mat = (req.groupby("material_name")["quantity"]
-                          .sum().nlargest(10).reset_index())
-            fig_m = px.bar(top_mat, x="quantity", y="material_name",
-                           orientation="h", color="quantity",
-                           color_continuous_scale="Oranges",
-                           labels={"quantity": "จำนวน", "material_name": "วัสดุ"})
-            fig_m.update_layout(yaxis=dict(autorange="reversed"),
-                                height=380, showlegend=False,
-                                margin=dict(l=0, r=10, t=10, b=0))
-            st.plotly_chart(fig_m, width=True)
-
+            top = req.groupby("material_name")["quantity"].sum().nlargest(10).reset_index()
+            fig = px.bar(top, x="quantity", y="material_name", orientation="h",
+                         color="quantity", color_continuous_scale="Oranges",
+                         labels={"quantity": "จำนวน", "material_name": "วัสดุ"})
+            fig.update_layout(yaxis=dict(autorange="reversed"), height=380, showlegend=False,
+                              margin=dict(l=0, r=10, t=10, b=0))
+            st.plotly_chart(fig, use_container_width=True)
         with right:
             st.subheader("👷 Top 10 ช่าง")
-            top_emp = (req.groupby("employee_name")["quantity"]
-                          .sum().nlargest(10).reset_index())
-            fig_e = px.bar(top_emp, x="quantity", y="employee_name",
-                           orientation="h", color="quantity",
-                           color_continuous_scale="Blues",
-                           labels={"quantity": "จำนวน", "employee_name": "ช่าง"})
-            fig_e.update_layout(yaxis=dict(autorange="reversed"),
-                                height=380, showlegend=False,
-                                margin=dict(l=0, r=10, t=10, b=0))
-            st.plotly_chart(fig_e, width=True)
+            top = req.groupby("employee_name")["quantity"].sum().nlargest(10).reset_index()
+            fig = px.bar(top, x="quantity", y="employee_name", orientation="h",
+                         color="quantity", color_continuous_scale="Blues",
+                         labels={"quantity": "จำนวน", "employee_name": "ช่าง"})
+            fig.update_layout(yaxis=dict(autorange="reversed"), height=380, showlegend=False,
+                              margin=dict(l=0, r=10, t=10, b=0))
+            st.plotly_chart(fig, use_container_width=True)
 
-    # ── Low stock alerts with status badges ──
     if not low.empty:
         st.subheader("⚠️ วัสดุใกล้หมด")
-        low_display = low[["item_name", "current_qty"]].copy()
-        low_display["สถานะ"] = low_display["current_qty"].apply(ds.get_stock_status)
-        low_display.rename(columns={"item_name": "วัสดุ", "current_qty": "คงเหลือ"},
-                           inplace=True)
-        st.dataframe(low_display, width=True, hide_index=True)
+        ld = low[["item_name", "current_qty"]].copy()
+        ld["สถานะ"] = ld["current_qty"].apply(ds.get_stock_status)
+        ld.rename(columns={"item_name": "วัสดุ", "current_qty": "คงเหลือ"}, inplace=True)
+        st.dataframe(ld, use_container_width=True, hide_index=True)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -166,494 +92,445 @@ if page == "🏠 หน้าหลัก":
 # ═══════════════════════════════════════════════════════════════════
 elif page == "📤 อัปโหลด Excel":
     st.title("📤 อัปโหลดไฟล์ Excel")
-    st.info("อัปโหลดไฟล์ Excel 2 ไฟล์จากระบบเดิม แล้วกดประมวลผล")
-
     col1, col2 = st.columns(2)
     with col1:
-        req_file = st.file_uploader("📄 ไฟล์เบิกวัสดุสิ้นเปลือง",
-                                     type=["xlsx", "xls"], key="req_upload")
+        req_file = st.file_uploader("📄 ไฟล์เบิกวัสดุ", type=["xlsx", "xls"], key="req_up")
     with col2:
-        pur_file = st.file_uploader("📄 ไฟล์ต้นทุน/สั่งซื้อ",
-                                     type=["xlsx", "xls"], key="pur_upload")
+        pur_file = st.file_uploader("📄 ไฟล์ต้นทุน/สั่งซื้อ", type=["xlsx", "xls"], key="pur_up")
 
-    if st.button("🚀 ประมวลผล ETL", type="primary", width=True):
-        if not req_file and not pur_file:
-            st.error("กรุณาอัปโหลดไฟล์อย่างน้อย 1 ไฟล์")
-        else:
-            os.makedirs(DATA_DIR, exist_ok=True)
-            req_path = pur_path = None
-            if req_file:
-                req_path = os.path.join(DATA_DIR, "upload_requisitions.xlsx")
-                with open(req_path, "wb") as f:
-                    f.write(req_file.read())
-            if pur_file:
-                pur_path = os.path.join(DATA_DIR, "upload_purchases.xlsx")
-                with open(pur_path, "wb") as f:
-                    f.write(pur_file.read())
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("🚀 ประมวลผล → Supabase", type="primary", use_container_width=True):
+            if not req_file and not pur_file:
+                st.error("กรุณาอัปโหลดไฟล์อย่างน้อย 1 ไฟล์")
+            else:
+                os.makedirs(DATA_DIR, exist_ok=True)
+                rp = pp = None
+                if req_file:
+                    rp = os.path.join(DATA_DIR, "upload_req.xlsx")
+                    with open(rp, "wb") as f: f.write(req_file.read())
+                if pur_file:
+                    pp = os.path.join(DATA_DIR, "upload_pur.xlsx")
+                    with open(pp, "wb") as f: f.write(pur_file.read())
+                with st.spinner("⏳ กำลังประมวลผล..."):
+                    try:
+                        result = run_full_etl(rp, pp)
+                        st.markdown('<div class="success-box">✅ บันทึกลง Supabase สำเร็จ!</div>',
+                                    unsafe_allow_html=True)
+                        for k, lbl in [("requisitions","เบิก"),("employees","ช่าง"),
+                                       ("materials","วัสดุ"),("purchases","ซื้อ")]:
+                            if k in result and not result[k].empty:
+                                st.success(f"📊 {lbl}: {len(result[k])} รายการ")
+                    except Exception as e:
+                        st.error(f"❌ {e}")
 
-            with st.spinner("⏳ กำลังประมวลผล..."):
-                try:
-                    # Run ETL
-                    result = run_full_etl(req_path, pur_path)
-                    refresh_data()
-
-                    # Log audit
-                    ds.log_audit("admin", "ETL Upload", 
-                                f"อัปโหลด req={bool(req_file)} pur={bool(pur_file)}")
-
-                    # Attempt Git commit
-                    committed = ds.git_commit("ETL: อัปโหลดไฟล์ Excel ใหม่ + อัปเดตข้อมูล")
-
-                    # UI Feedback
-                    st.markdown('<div class="success-box">✅ ประมวลผล ETL สำเร็จ!</div>',
-                                unsafe_allow_html=True)
-
-                    # Show summary of loaded data
-                    for key, label in [("requisitions", "รายการเบิก"),
-                                       ("employees", "รายชื่อช่าง"),
-                                       ("materials", "รายการวัสดุ"),
-                                       ("purchases", "รายการซื้อ")]:
-                        if key in result and not result[key].empty:
-                            st.success(f"📊 {label}: {len(result[key])} รายการ")
-
-                    # Git commit status - clearer message
-                    if committed:
-                        st.caption("💾 บันทึกข้อมูลลง Git และ Push ไป GitHub เรียบร้อยแล้ว")
-                    else:
-                        st.caption("⚠️ ข้อมูลถูกบันทึกเป็น CSV เรียบร้อยแล้ว "
-                                   "แต่ Git commit / push ล้มเหลว (ตรวจสอบ GITHUB_PAT ใน Secrets)")
-
-                except Exception as e:
-                    st.error(f"❌ เกิดข้อผิดพลาดในการประมวลผล ETL: {e}")
+    with c2:
+        if st.button("📥 Backup Clean Excel", use_container_width=True):
+            rp = os.path.join(DATA_DIR, "upload_req.xlsx") if req_file or os.path.exists(os.path.join(DATA_DIR, "upload_req.xlsx")) else None
+            pp = os.path.join(DATA_DIR, "upload_pur.xlsx") if pur_file or os.path.exists(os.path.join(DATA_DIR, "upload_pur.xlsx")) else None
+            if not rp and not pp:
+                st.warning("กรุณาอัปโหลดไฟล์ก่อน")
+            else:
+                rp = rp if rp and os.path.exists(rp) else None
+                pp = pp if pp and os.path.exists(pp) else None
+                with st.spinner("กำลังสร้างไฟล์ Clean Excel..."):
+                    data = generate_clean_excel(rp, pp)
+                    st.download_button("⬇️ ดาวน์โหลด Clean Excel", data,
+                                       f"SP_Clean_{datetime.now():%Y%m%d}.xlsx",
+                                       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 📝 เบิกวัสดุ — with duplicate prevention + tx ID feedback
+# 📝 เบิกวัสดุ
 # ═══════════════════════════════════════════════════════════════════
 elif page == "📝 เบิกวัสดุ":
     st.title("📝 ฟอร์มเบิกวัสดุ")
-
-    emp = st.session_state["employees"]
-    mat = st.session_state["materials"]
-
+    emp, mat = ds.get_employees(), ds.get_materials()
     if emp.empty or mat.empty:
         st.warning("⚠️ ยังไม่มีข้อมูลช่าง/วัสดุ กรุณาอัปโหลด Excel ก่อน")
     else:
         emp_names = sorted(emp["name"].dropna().unique().tolist())
         mat_names = sorted(mat["item_name"].dropna().unique().tolist())
-
-        st.markdown("### เลือกรายการเบิก")
-        col1, col2 = st.columns(2)
-        with col1:
-            selected_emp = st.selectbox("👷 ชื่อช่าง", emp_names)
-        with col2:
-            selected_mat = st.selectbox("🧰 วัสดุ", mat_names)
-
-        quantity  = st.number_input("📦 จำนวน", min_value=1, max_value=100,
-                                    value=1, step=1)
+        c1, c2 = st.columns(2)
+        with c1: sel_emp = st.selectbox("👷 ชื่อช่าง", emp_names)
+        with c2: sel_mat = st.selectbox("🧰 วัสดุ", mat_names)
+        quantity = st.number_input("📦 จำนวน", min_value=1, max_value=100, value=1)
         issued_by = st.text_input("🔑 ผู้บันทึก", value="admin")
 
-        # Show current stock for this material
-        stock = st.session_state["stock"]
+        stock = ds.get_stock()
         if not stock.empty and "item_name" in stock.columns:
-            mat_stock = stock[stock["item_name"] == selected_mat]
-            if not mat_stock.empty:
-                curr = int(mat_stock.iloc[0].get("current_qty", 0))
-                status = ds.get_stock_status(curr)
-                st.info(f"📦 สต็อกปัจจุบัน: **{selected_mat}** = **{curr}** ชิ้น {status}")
+            ms = stock[stock["item_name"] == sel_mat]
+            if not ms.empty:
+                c = int(ms.iloc[0].get("current_qty", 0))
+                st.info(f"📦 สต็อก: **{sel_mat}** = **{c}** ชิ้น {ds.get_stock_status(c)}")
 
         st.divider()
-        st.markdown(
-            f"**สรุป:** {selected_emp} เบิก "
-            f"**{selected_mat}** จำนวน **{quantity}** ชิ้น")
-
-        if st.button("✅ ยืนยันเบิกวัสดุ", type="primary",
-                     width=True):
-            result = ds.issue_material(selected_emp, selected_mat,
-                                       quantity, issued_by)
-            if result["ok"]:
-                refresh_data()
-                if result.get("committed"):
-                    git_line = "💾 บันทึกและซิงค์ Git สำเร็จ"
-                else:
-                    git_line = ("⚠️ ข้อมูล CSV บันทึกแล้ว แต่ Git commit ไม่สำเร็จ "
-                                "— ตรวจสอบว่าติดตั้ง Git และตั้ง token ใน secrets.toml")
-                st.markdown(
-                    f'<div class="success-box">{result["msg"]}</div>'
-                    f'<div class="tx-id">🔖 รหัส: {result["tx_id"]}  '
-                    f'{git_line}</div>',
-                    unsafe_allow_html=True)
+        st.markdown(f"**สรุป:** {sel_emp} เบิก **{sel_mat}** จำนวน **{quantity}** ชิ้น")
+        if st.button("✅ ยืนยันเบิก", type="primary", use_container_width=True):
+            r = ds.issue_material(sel_emp, sel_mat, quantity, issued_by)
+            if r["ok"]:
+                st.markdown(f'<div class="success-box">{r["msg"]}</div>'
+                            f'<div class="tx-id">🔖 {r["tx_id"]} 💾</div>',
+                            unsafe_allow_html=True)
                 st.balloons()
             else:
-                st.markdown(
-                    f'<div class="dup-box">{result["msg"]}</div>',
-                    unsafe_allow_html=True)
+                st.markdown(f'<div class="dup-box">{r["msg"]}</div>', unsafe_allow_html=True)
 
-        # ── Recent issuances ──
-        req = st.session_state["requisitions"]
+        req = ds.get_requisitions()
         if not req.empty:
-            with st.expander("📋 รายการเบิกล่าสุด (20 รายการ)"):
-                recent_cols = [c for c in ["tx_id", "date", "time",
-                                            "employee_name", "material_name",
-                                            "quantity", "issued_by"]
-                               if c in req.columns]
-                recent = req[recent_cols].tail(20).iloc[::-1]
-                rename = {"tx_id": "รหัส", "date": "วันที่", "time": "เวลา",
-                          "employee_name": "ช่าง", "material_name": "วัสดุ",
-                          "quantity": "จำนวน", "issued_by": "ผู้บันทึก"}
-                st.dataframe(recent.rename(columns=rename),
-                             width=True, hide_index=True)
+            with st.expander("📋 ล่าสุด 20 รายการ"):
+                cols = [c for c in ["tx_id","date","time","employee_name","material_name","quantity","issued_by"] if c in req.columns]
+                st.dataframe(req[cols].head(20).rename(columns={
+                    "tx_id":"รหัส","date":"วันที่","time":"เวลา","employee_name":"ช่าง",
+                    "material_name":"วัสดุ","quantity":"จำนวน","issued_by":"ผู้บันทึก"}),
+                    use_container_width=True, hide_index=True)
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 📦 สต็อกวัสดุ — tiered color + status badges
+# 📦 สต็อกวัสดุ
 # ═══════════════════════════════════════════════════════════════════
 elif page == "📦 สต็อกวัสดุ":
     st.title("📦 สต็อกวัสดุปัจจุบัน")
-
-    stock = st.session_state["stock"]
+    stock = ds.get_stock()
     if stock.empty:
         st.warning("⚠️ ยังไม่มีข้อมูลสต็อก")
     else:
-        search = st.text_input("🔍 ค้นหาวัสดุ", "")
-        display = stock.copy()
+        search = st.text_input("🔍 ค้นหา", "")
+        disp = stock.copy()
         if search:
-            display = display[
-                display["item_name"].str.contains(search, case=False, na=False)]
+            disp = disp[disp["item_name"].str.contains(search, case=False, na=False)]
+        disp["status"] = disp["current_qty"].apply(ds.get_stock_status)
+        cols = [c for c in ["item_name","current_qty","status","last_updated"] if c in disp.columns]
+        rn = {"item_name":"วัสดุ","current_qty":"คงเหลือ","status":"สถานะ","last_updated":"อัปเดต"}
+        styled = disp[cols].rename(columns=rn)
 
-        # Add status column BEFORE rename
-        display["status"] = display["current_qty"].apply(ds.get_stock_status)
+        def hl(row):
+            q = 99
+            try: q = int(row.get("คงเหลือ",99))
+            except: pass
+            if q <= 0: return ["background-color:#f5c6cb"]*len(row)
+            if q <= 5: return ["background-color:#f8d7da"]*len(row)
+            if q <= 10: return ["background-color:#fff3cd"]*len(row)
+            return [""]*len(row)
 
-        cols_show = [c for c in ["item_name", "current_qty", "status", "last_updated"]
-                     if c in display.columns]
-        rename_map = {"item_name": "วัสดุ", "current_qty": "คงเหลือ",
-                      "status": "สถานะ", "last_updated": "อัปเดตล่าสุด"}
-        styled_df = display[cols_show].rename(columns=rename_map)
+        st.dataframe(styled.style.apply(hl, axis=1), use_container_width=True, hide_index=True, height=500)
 
-        # Tiered row coloring (operates on renamed columns)
-        def highlight_stock(row):
-            qty = 99
-            try:
-                qty = int(row.get("คงเหลือ", 99))
-            except (ValueError, TypeError):
-                pass
-            if qty <= 0:
-                return ["background-color: #f5c6cb"] * len(row)
-            if qty <= 5:
-                return ["background-color: #f8d7da"] * len(row)
-            if qty <= 10:
-                return ["background-color: #fff3cd"] * len(row)
-            return [""] * len(row)
+        if len(disp) > 0:
+            sc = disp["status"].value_counts().reset_index()
+            sc.columns = ["สถานะ","จำนวน"]
+            fig = px.pie(sc, values="จำนวน", names="สถานะ", color="สถานะ",
+                         color_discrete_map={"🔴 หมด":"#dc3545","🟠 วิกฤต":"#fd7e14",
+                                             "🟡 ต่ำ":"#ffc107","🟢 ปกติ":"#28a745"})
+            st.plotly_chart(fig, use_container_width=True)
 
-        st.dataframe(
-            styled_df.style.apply(highlight_stock, axis=1),
-            width=True, hide_index=True, height=500)
-
-        # ── Stock distribution chart ──
-        if len(display) > 0:
-            status_counts = display["status"].value_counts().reset_index()
-            status_counts.columns = ["สถานะ", "จำนวน"]
-            fig = px.pie(status_counts, values="จำนวน", names="สถานะ",
-                         color="สถานะ",
-                         color_discrete_map={
-                             "🔴 หมด": "#dc3545", "🟠 วิกฤต": "#fd7e14",
-                             "🟡 ต่ำ": "#ffc107", "🟢 ปกติ": "#28a745"},
-                         title="สัดส่วนสถานะสต็อก")
-            st.plotly_chart(fig, width=True)
-
-        # ── Receive stock sub-form ──
         st.divider()
-        st.subheader("➕ รับวัสดุเข้าสต็อก")
-        c1, c2, c3 = st.columns(3)
-        mat_names = sorted(stock["item_name"].dropna().unique().tolist())
-        with c1:
-            add_mat = st.selectbox("วัสดุ", mat_names, key="add_stock_mat")
-        with c2:
-            add_qty = st.number_input("จำนวน", min_value=1, value=10,
-                                      key="add_stock_qty")
-        with c3:
-            add_user = st.text_input("ผู้รับเข้า", value="admin",
-                                     key="add_stock_user")
-        if st.button("✅ รับเข้าสต็อก", type="primary"):
-            result = ds.add_stock(add_mat, add_qty, add_user)
-            refresh_data()
-            if result and result.get("ok"):
-                if result.get("committed"):
-                    st.success(f"{result['msg']}  💾 ซิงค์ Git สำเร็จ")
-                else:
-                    st.success(result["msg"])
-                    st.caption("⚠️ CSV บันทึกแล้ว แต่ Git commit ไม่สำเร็จ")
-            else:
-                st.warning(result.get("msg", "ไม่สามารถเพิ่มสต็อกได้") if result else "ไม่สามารถเพิ่มสต็อกได้")
+        st.subheader("➕ รับวัสดุเข้า")
+        c1,c2,c3 = st.columns(3)
+        mn = sorted(stock["item_name"].dropna().unique().tolist())
+        with c1: am = st.selectbox("วัสดุ", mn, key="as_m")
+        with c2: aq = st.number_input("จำนวน", min_value=1, value=10, key="as_q")
+        with c3: au = st.text_input("ผู้รับ", value="admin", key="as_u")
+        if st.button("✅ รับเข้า", type="primary"):
+            r = ds.add_stock(am, aq, au)
+            st.success(r["msg"]) if r.get("ok") else st.warning(r.get("msg","error"))
             st.rerun()
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 📊 รายงานช่าง — monthly vs cumulative toggle
+# 📊 รายงานช่าง
 # ═══════════════════════════════════════════════════════════════════
 elif page == "📊 รายงานช่าง":
-    st.title("📊 รายงานการเบิกวัสดุรายช่าง")
-
-    req = st.session_state["requisitions"]
-    if req.empty:
-        st.warning("⚠️ ยังไม่มีข้อมูลการเบิก")
-    else:
-        emp_names = sorted(req["employee_name"].dropna().unique().tolist())
-
-        # ── View mode selector ──
-        view_mode = st.radio("มุมมอง",
-                             ["ภาพรวมทุกคน (สะสม)", "เปรียบเทียบรายเดือน", "รายบุคคล"],
-                             horizontal=True)
-
-        if view_mode == "ภาพรวมทุกคน (สะสม)":
-            usage = (req.groupby("employee_name")["quantity"]
-                        .sum().sort_values(ascending=False).reset_index())
-            usage.columns = ["ชื่อช่าง", "จำนวนเบิกรวม"]
-            st.dataframe(usage, width=True, hide_index=True)
-            fig = px.bar(usage.head(15), x="ชื่อช่าง", y="จำนวนเบิกรวม",
-                         color="จำนวนเบิกรวม", color_continuous_scale="Reds")
-            fig.update_layout(height=400)
-            st.plotly_chart(fig, width=True)
-
-        elif view_mode == "เปรียบเทียบรายเดือน":
-            # Monthly comparison — grouped bar chart
-            periods = ds.get_available_periods()
-            if not periods:
-                st.info("ไม่มีข้อมูลรายเดือน")
-            else:
-                req_copy = req.copy()
-                req_copy["period"] = req_copy.apply(
-                    lambda r: f"{int(r['month']):02d}/{int(r['year'])}"
-                    if pd.notna(r.get("month")) and pd.notna(r.get("year"))
-                    else None, axis=1)
-                monthly = (req_copy.groupby(["employee_name", "period"])["quantity"]
-                                   .sum().reset_index())
-                fig = px.bar(monthly, x="employee_name", y="quantity",
-                             color="period", barmode="group",
-                             labels={"employee_name": "ช่าง", "quantity": "จำนวน",
-                                     "period": "เดือน/ปี"})
-                fig.update_layout(height=450)
-                st.plotly_chart(fig, width=True)
-
-                st.subheader("📋 ตารางสะสมรายเดือน (แบบ VBA)")
-                monthly_pivot = ds.get_monthly_summary()
-                if not monthly_pivot.empty:
-                    st.dataframe(monthly_pivot, width=True)
-
-        else:  # รายบุคคล
-            selected = st.selectbox("เลือกช่าง", emp_names)
-            emp_req = req[req["employee_name"] == selected]
-            by_mat = (emp_req.groupby("material_name")["quantity"]
-                             .sum().sort_values(ascending=False).reset_index())
-            by_mat.columns = ["วัสดุ", "จำนวน"]
-
-            c1, c2 = st.columns(2)
-            c1.metric("จำนวนเบิกทั้งหมด", int(by_mat["จำนวน"].sum()))
-            c2.metric("จำนวนรายการวัสดุ", len(by_mat))
-
-            st.dataframe(by_mat, width=True, hide_index=True)
-            fig = px.pie(by_mat.head(10), values="จำนวน", names="วัสดุ",
-                         title=f"สัดส่วนวัสดุที่ {selected} เบิก")
-            st.plotly_chart(fig, width=True)
-
-            # Monthly breakdown for this employee
-            if "month" in emp_req.columns and "year" in emp_req.columns:
-                emp_req_c = emp_req.copy()
-                emp_req_c["period"] = emp_req_c.apply(
-                    lambda r: f"{int(r['month']):02d}/{int(r['year'])}"
-                    if pd.notna(r.get("month")) else None, axis=1)
-                monthly = (emp_req_c.groupby("period")["quantity"]
-                                    .sum().reset_index())
-                if len(monthly) > 1:
-                    st.subheader("📈 แนวโน้มรายเดือน")
-                    fig2 = px.line(monthly, x="period", y="quantity",
-                                   markers=True,
-                                   labels={"period": "เดือน", "quantity": "จำนวน"})
-                    st.plotly_chart(fig2, width=True)
-
-
-# ═══════════════════════════════════════════════════════════════════
-# 🗓️ สรุปรายเดือน — VBA monthly sheet accumulation
-# ═══════════════════════════════════════════════════════════════════
-elif page == "🗓️ สรุปรายเดือน":
-    st.title("🗓️ สรุปการเบิกรายเดือน")
-    st.info("แสดงยอดสะสมรายเดือนแบบเดียวกับชีท VBA เดิม")
-
-    tab1, tab2 = st.tabs(["👷 รายช่าง × เดือน", "🧰 รายวัสดุ × เดือน"])
-
-    with tab1:
-        pivot_emp = ds.get_monthly_summary()
-        if pivot_emp.empty:
-            st.warning("ยังไม่มีข้อมูล")
-        else:
-            st.dataframe(pivot_emp, width=True, height=500)
-
-            st.subheader("📊 กราฟเปรียบเทียบยอดรวม")
-            totals = pivot_emp["รวมทั้งหมด"].reset_index()
-            totals.columns = ["ช่าง", "รวม"]
-            fig = px.bar(totals.sort_values("รวม", ascending=False).head(15),
-                         x="ช่าง", y="รวม", color="รวม",
-                         color_continuous_scale="Reds")
-            st.plotly_chart(fig, width=True)
-
-    with tab2:
-        pivot_mat = ds.get_monthly_by_material()
-        if pivot_mat.empty:
-            st.warning("ยังไม่มีข้อมูล")
-        else:
-            st.dataframe(pivot_mat, width=True, height=500)
-
-            st.subheader("📊 กราฟเปรียบเทียบยอดรวม")
-            totals = pivot_mat["รวมทั้งหมด"].reset_index()
-            totals.columns = ["วัสดุ", "รวม"]
-            fig = px.bar(totals.sort_values("รวม", ascending=False).head(15),
-                         x="วัสดุ", y="รวม", color="รวม",
-                         color_continuous_scale="Oranges")
-            st.plotly_chart(fig, width=True)
-
-
-# ═══════════════════════════════════════════════════════════════════
-# 🔥 Heatmap — usage intensity (employee × material)
-# ═══════════════════════════════════════════════════════════════════
-elif page == "🔥 Heatmap การใช้งาน":
-    st.title("🔥 Heatmap ความเข้มข้นการใช้วัสดุ")
-    st.info("แสดงปริมาณการเบิกของแต่ละช่าง × แต่ละวัสดุ "
-            "— สีเข้ม = เบิกมาก, สีอ่อน = เบิกน้อย")
-
-    # Period filter
-    periods = ds.get_available_periods()
-    period_filter = st.selectbox(
-        "🗓️ เลือกช่วงเวลา",
-        ["ทั้งหมด (สะสม)"] + periods)
-
+    st.title("📊 รายงานช่าง")
     req = ds.get_requisitions()
     if req.empty:
-        st.warning("ยังไม่มีข้อมูล")
+        st.warning("⚠️ ไม่มีข้อมูล")
     else:
-        if period_filter != "ทั้งหมด (สะสม)":
+        mode = st.radio("มุมมอง", ["ภาพรวม","รายเดือน","รายบุคคล"], horizontal=True)
+        if mode == "ภาพรวม":
+            u = req.groupby("employee_name")["quantity"].sum().sort_values(ascending=False).reset_index()
+            u.columns = ["ชื่อช่าง","จำนวน"]
+            st.dataframe(u, use_container_width=True, hide_index=True)
+            fig = px.bar(u.head(15), x="ชื่อช่าง", y="จำนวน", color="จำนวน", color_continuous_scale="Reds")
+            st.plotly_chart(fig, use_container_width=True)
+        elif mode == "รายเดือน":
+            pv = ds.get_monthly_summary()
+            if pv.empty: st.info("ไม่มีข้อมูล")
+            else: st.dataframe(pv, use_container_width=True)
+        else:
+            names = sorted(req["employee_name"].dropna().unique().tolist())
+            sel = st.selectbox("เลือกช่าง", names)
+            er = req[req["employee_name"]==sel]
+            bm = er.groupby("material_name")["quantity"].sum().sort_values(ascending=False).reset_index()
+            bm.columns = ["วัสดุ","จำนวน"]
+            st.metric("เบิกทั้งหมด", int(bm["จำนวน"].sum()))
+            st.dataframe(bm, use_container_width=True, hide_index=True)
+            fig = px.pie(bm.head(10), values="จำนวน", names="วัสดุ")
+            st.plotly_chart(fig, use_container_width=True)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 🗓️ สรุปรายเดือน
+# ═══════════════════════════════════════════════════════════════════
+elif page == "🗓️ สรุปรายเดือน":
+    st.title("🗓️ สรุปรายเดือน")
+    t1, t2 = st.tabs(["👷 ช่าง×เดือน", "🧰 วัสดุ×เดือน"])
+    with t1:
+        pv = ds.get_monthly_summary()
+        if pv.empty: st.warning("ไม่มีข้อมูล")
+        else:
+            st.dataframe(pv, use_container_width=True, height=500)
+            tot = pv["รวมทั้งหมด"].reset_index(); tot.columns = ["ช่าง","รวม"]
+            fig = px.bar(tot.sort_values("รวม",ascending=False).head(15), x="ช่าง", y="รวม",
+                         color="รวม", color_continuous_scale="Reds")
+            st.plotly_chart(fig, use_container_width=True)
+    with t2:
+        pv = ds.get_monthly_by_material()
+        if pv.empty: st.warning("ไม่มีข้อมูล")
+        else:
+            st.dataframe(pv, use_container_width=True, height=500)
+            tot = pv["รวมทั้งหมด"].reset_index(); tot.columns = ["วัสดุ","รวม"]
+            fig = px.bar(tot.sort_values("รวม",ascending=False).head(15), x="วัสดุ", y="รวม",
+                         color="รวม", color_continuous_scale="Oranges")
+            st.plotly_chart(fig, use_container_width=True)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 🔥 Heatmap
+# ═══════════════════════════════════════════════════════════════════
+elif page == "🔥 Heatmap การใช้งาน":
+    st.title("🔥 Heatmap การใช้วัสดุ")
+    periods = ds.get_available_periods()
+    pf = st.selectbox("🗓️ ช่วงเวลา", ["ทั้งหมด"] + periods)
+    req = ds.get_requisitions()
+    if req.empty:
+        st.warning("ไม่มีข้อมูล")
+    else:
+        if pf != "ทั้งหมด":
+            req = req.copy()
             req["period"] = req.apply(
                 lambda r: f"{int(r['month']):02d}/{int(r['year'])}"
-                if pd.notna(r.get("month")) and pd.notna(r.get("year"))
-                else None, axis=1)
-            req = req[req["period"] == period_filter]
-
+                if pd.notna(r.get("month")) and pd.notna(r.get("year")) else None, axis=1)
+            req = req[req["period"]==pf]
         if req.empty:
-            st.info("ไม่มีข้อมูลในช่วงเวลาที่เลือก")
+            st.info("ไม่มีข้อมูลช่วงนี้")
         else:
-            pivot = req.pivot_table(
-                index="employee_name", columns="material_name",
-                values="quantity", aggfunc="sum", fill_value=0)
-
-            fig = px.imshow(
-                pivot.values,
-                x=pivot.columns.tolist(),
-                y=pivot.index.tolist(),
-                color_continuous_scale="YlOrRd",
-                aspect="auto",
-                labels=dict(x="วัสดุ", y="ช่าง", color="จำนวน"),
-            )
-            fig.update_layout(
-                height=max(400, len(pivot) * 28),
-                xaxis=dict(tickangle=45),
-                margin=dict(l=0, r=0, t=30, b=0),
-            )
-            st.plotly_chart(fig, width=True)
-
-            # Raw data expander
-            with st.expander("📋 ดูตาราง Pivot"):
-                st.dataframe(pivot, width=True)
+            pv = req.pivot_table(index="employee_name", columns="material_name",
+                                  values="quantity", aggfunc="sum", fill_value=0)
+            fig = px.imshow(pv.values, x=pv.columns.tolist(), y=pv.index.tolist(),
+                            color_continuous_scale="YlOrRd", aspect="auto",
+                            labels=dict(x="วัสดุ",y="ช่าง",color="จำนวน"))
+            fig.update_layout(height=max(400,len(pv)*28), xaxis=dict(tickangle=45))
+            st.plotly_chart(fig, use_container_width=True)
+            with st.expander("📋 ตาราง"): st.dataframe(pv, use_container_width=True)
 
 
 # ═══════════════════════════════════════════════════════════════════
-# ⚠️ ตรวจจับความผิดปกติ — overall + per-material
+# 💰 Cost & Supplier Analysis ★ NEW
+# ═══════════════════════════════════════════════════════════════════
+elif page == "💰 Cost & Supplier":
+    st.title("💰 Cost & Supplier Analysis")
+
+    # ── KPI Cards ──
+    kpi = ds.get_cost_kpis()
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("💵 ยอดรวมทั้งหมด", f"฿{kpi['total_spend']:,.0f}")
+    c2.metric("📅 เดือนนี้", f"฿{kpi['this_month']:,.0f}")
+    c3.metric("📊 YTD", f"฿{kpi['ytd_spend']:,.0f}")
+    c4.metric("📈 เฉลี่ย/วัน", f"฿{kpi['avg_daily']:,.0f}")
+
+    if kpi["top_drivers"]:
+        st.caption("🔝 Top cost drivers: " + " | ".join(
+            f"**{d[0]}** ฿{d[1]:,.0f}" for d in kpi["top_drivers"]))
+
+    st.divider()
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "📈 แนวโน้มรายเดือน", "📦 หมวดหมู่", "🏪 ซัพพลายเออร์",
+        "⚡ ราคาผิดปกติ", "📊 ซื้อ vs เบิก"
+    ])
+
+    # ── Tab 1: Monthly Cost Trend ──
+    with tab1:
+        mc = ds.get_monthly_cost()
+        if mc.empty:
+            st.info("ไม่มีข้อมูลต้นทุน")
+        else:
+            monthly_total = mc.groupby("period")["total_cost"].sum().reset_index().sort_values("period")
+            fig = px.line(monthly_total, x="period", y="total_cost", markers=True,
+                          labels={"period":"เดือน","total_cost":"ต้นทุนรวม (บาท)"},
+                          title="แนวโน้มต้นทุนรายเดือน")
+            fig.update_layout(height=400)
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Stacked by category
+            by_cat = mc.groupby(["period","sheet_category"])["total_cost"].sum().reset_index()
+            fig2 = px.bar(by_cat, x="period", y="total_cost", color="sheet_category",
+                          labels={"period":"เดือน","total_cost":"บาท","sheet_category":"หมวด"},
+                          title="ต้นทุนรายเดือน แยกตามหมวด")
+            st.plotly_chart(fig2, use_container_width=True)
+
+            # Forecast
+            fc = ds.get_cost_forecast()
+            if not fc.empty and "forecast" in fc.columns:
+                st.subheader("🔮 พยากรณ์ต้นทุน (3-month MA)")
+                fig3 = go.Figure()
+                fig3.add_trace(go.Scatter(x=fc["period"], y=fc["total_cost"],
+                                          mode="lines+markers", name="ต้นทุนจริง"))
+                fig3.add_trace(go.Scatter(x=fc["period"], y=fc["forecast"],
+                                          mode="lines", name="พยากรณ์", line=dict(dash="dash")))
+                overbudget = fc[fc["over_budget"]==True]
+                if not overbudget.empty:
+                    fig3.add_trace(go.Scatter(x=overbudget["period"], y=overbudget["total_cost"],
+                                              mode="markers", name="⚠️ เกินงบ",
+                                              marker=dict(size=14, color="red", symbol="x")))
+                fig3.update_layout(height=350)
+                st.plotly_chart(fig3, use_container_width=True)
+
+    # ── Tab 2: Category Breakdown ──
+    with tab2:
+        cat = ds.get_category_cost()
+        if cat.empty:
+            st.info("ไม่มีข้อมูล")
+        else:
+            c1, c2 = st.columns(2)
+            with c1:
+                fig = px.pie(cat, values="total_cost", names="category",
+                             title="สัดส่วนต้นทุนตามหมวด", hole=0.4)
+                st.plotly_chart(fig, use_container_width=True)
+            with c2:
+                fig = px.bar(cat.sort_values("total_cost", ascending=False),
+                             x="category", y="total_cost", color="total_cost",
+                             color_continuous_scale="Reds",
+                             labels={"category":"หมวด","total_cost":"บาท"})
+                st.plotly_chart(fig, use_container_width=True)
+            st.dataframe(cat.rename(columns={"category":"หมวด","item_count":"จำนวนรายการ",
+                                              "total_cost":"ต้นทุนรวม","avg_cost":"เฉลี่ย/รายการ"}),
+                         use_container_width=True, hide_index=True)
+
+    # ── Tab 3: Supplier Ranking ──
+    with tab3:
+        sup = ds.get_supplier_ranking()
+        if sup.empty:
+            st.info("ไม่มีข้อมูล")
+        else:
+            st.subheader("🏪 อันดับซัพพลายเออร์")
+            fig = px.bar(sup.head(15), x="supplier_name", y="total_spend",
+                         color="total_spend", color_continuous_scale="Blues",
+                         labels={"supplier_name":"ร้านค้า","total_spend":"ยอดรวม (บาท)"})
+            st.plotly_chart(fig, use_container_width=True)
+            rn = {"supplier_name":"ร้านค้า","order_count":"จำนวนครั้ง","total_spend":"ยอดรวม",
+                  "total_qty":"จำนวนชิ้น","unique_items":"รายการ"}
+            cols = [c for c in rn.keys() if c in sup.columns]
+            st.dataframe(sup[cols].rename(columns=rn), use_container_width=True, hide_index=True)
+
+    # ── Tab 4: Price Spikes ──
+    with tab4:
+        threshold = st.slider("เกณฑ์ราคาเพิ่ม (%)", 10, 100, 30, 5)
+        spikes = ds.get_price_spikes(threshold)
+        if spikes.empty:
+            st.success(f"✅ ไม่พบราคาเพิ่มขึ้น > {threshold}%")
+        else:
+            st.warning(f"🚨 พบ {len(spikes)} รายการที่ราคาเพิ่ม > {threshold}%")
+            spikes_display = spikes.copy()
+            spikes_display["pct_change"] = spikes_display["pct_change"].round(1)
+            spikes_display.rename(columns={
+                "item_name":"รายการ","supplier_name":"ร้านค้า","purchase_date":"วันที่",
+                "prev_price":"ราคาเดิม","price_per_unit":"ราคาใหม่","pct_change":"เพิ่ม %"
+            }, inplace=True)
+            st.dataframe(spikes_display, use_container_width=True, hide_index=True)
+
+    # ── Tab 5: Cost vs Usage ──
+    with tab5:
+        cvu = ds.get_cost_vs_usage()
+        if cvu.empty:
+            st.info("ไม่มีข้อมูล")
+        else:
+            st.subheader("📊 ซื้อเข้า vs เบิกออก")
+            fig = go.Figure()
+            cvu_sorted = cvu.sort_values("purchase_cost", ascending=False).head(20)
+            fig.add_trace(go.Bar(x=cvu_sorted["item_name"], y=cvu_sorted["purchased_qty"],
+                                 name="ซื้อเข้า", marker_color="#4e79a7"))
+            fig.add_trace(go.Bar(x=cvu_sorted["item_name"], y=cvu_sorted["issued_qty"],
+                                 name="เบิกออก", marker_color="#e15759"))
+            fig.update_layout(barmode="group", height=400,
+                              xaxis=dict(tickangle=45),
+                              legend=dict(orientation="h", yanchor="bottom", y=1.02))
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Overstock / understock table
+            st.subheader("📦 สถานะ สต็อกเกิน / สต็อกต่ำ")
+            alert = cvu[cvu["stock_status"] != "ปกติ"].sort_values("stock_status")
+            if alert.empty:
+                st.success("✅ สต็อกทุกรายการปกติ")
+            else:
+                alert_display = alert[["item_name","purchased_qty","issued_qty","current_stock","stock_status"]].copy()
+                alert_display.rename(columns={
+                    "item_name":"รายการ","purchased_qty":"ซื้อเข้า","issued_qty":"เบิกออก",
+                    "current_stock":"คงเหลือ","stock_status":"สถานะ"
+                }, inplace=True)
+                st.dataframe(alert_display, use_container_width=True, hide_index=True)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ⚠️ ตรวจจับความผิดปกติ
 # ═══════════════════════════════════════════════════════════════════
 elif page == "⚠️ ตรวจจับความผิดปกติ":
-    st.title("⚠️ ตรวจจับการเบิกผิดปกติ")
-
-    threshold = st.slider("ค่า Z-Score Threshold", 1.0, 4.0, 2.0, 0.5)
-
-    tab1, tab2 = st.tabs(["📊 ภาพรวม (ยอดรวมทุกวัสดุ)",
-                           "🔬 รายวัสดุ (ผิดปกติเฉพาะรายการ)"])
-
-    with tab1:
-        anomalies = ds.get_anomalies(threshold)
-        if anomalies.empty:
-            st.success("✅ ไม่พบความผิดปกติ")
+    st.title("⚠️ ตรวจจับความผิดปกติ")
+    threshold = st.slider("Z-Score", 1.0, 4.0, 2.0, 0.5)
+    t1, t2 = st.tabs(["📊 ภาพรวม", "🔬 รายวัสดุ"])
+    with t1:
+        anom = ds.get_anomalies(threshold)
+        if anom.empty:
+            st.success("✅ ไม่พบ")
         else:
-            st.warning(f"🚨 พบ {len(anomalies)} รายการที่น่าสงสัย")
-            display_a = anomalies.copy()
-            display_a.columns = ["ชื่อช่าง", "จำนวนเบิกรวม", "Z-Score"]
-            display_a["Z-Score"] = display_a["Z-Score"].round(2)
-            st.dataframe(display_a, width=True, hide_index=True)
-
-        # All employees bar chart
-        req = st.session_state["requisitions"]
+            st.warning(f"🚨 พบ {len(anom)} รายการ")
+            da = anom.copy(); da.columns = ["ช่าง","จำนวน","Z-Score"]
+            da["Z-Score"] = da["Z-Score"].round(2)
+            st.dataframe(da, use_container_width=True, hide_index=True)
+        req = ds.get_requisitions()
         if not req.empty:
-            all_usage = (req.groupby("employee_name")["quantity"]
-                            .sum().sort_values(ascending=False).reset_index())
-            mean_val = all_usage["quantity"].mean()
-            fig = px.bar(all_usage, x="employee_name", y="quantity",
-                         labels={"employee_name": "ช่าง",
-                                 "quantity": "จำนวนเบิกรวม"})
-            fig.add_hline(y=mean_val, line_dash="dash", line_color="red",
-                          annotation_text=f"ค่าเฉลี่ย ({mean_val:.0f})")
-            std_val = all_usage["quantity"].std()
-            if std_val > 0:
-                fig.add_hline(y=mean_val + threshold * std_val,
-                              line_dash="dot", line_color="orange",
-                              annotation_text=f"เกณฑ์ผิดปกติ (Z={threshold})")
-            fig.update_layout(height=400)
-            st.plotly_chart(fig, width=True)
-
-    with tab2:
-        st.markdown("ตรวจจับช่างที่เบิก **วัสดุแต่ละชนิด** มากผิดปกติ "
-                    "เมื่อเทียบกับช่างคนอื่นที่ใช้วัสดุชนิดเดียวกัน")
-        per_mat = ds.get_anomalies_per_material(threshold)
-        if per_mat.empty:
-            st.success("✅ ไม่พบความผิดปกติเฉพาะรายการ")
+            au = req.groupby("employee_name")["quantity"].sum().sort_values(ascending=False).reset_index()
+            mv = au["quantity"].mean()
+            fig = px.bar(au, x="employee_name", y="quantity",
+                         labels={"employee_name":"ช่าง","quantity":"เบิกรวม"})
+            fig.add_hline(y=mv, line_dash="dash", line_color="red",
+                          annotation_text=f"เฉลี่ย ({mv:.0f})")
+            sv = au["quantity"].std()
+            if sv > 0:
+                fig.add_hline(y=mv+threshold*sv, line_dash="dot", line_color="orange",
+                              annotation_text=f"เกณฑ์ (Z={threshold})")
+            st.plotly_chart(fig, use_container_width=True)
+    with t2:
+        pm = ds.get_anomalies_per_material(threshold)
+        if pm.empty:
+            st.success("✅ ไม่พบ")
         else:
-            st.warning(f"🚨 พบ {len(per_mat)} คู่ ช่าง×วัสดุ ที่น่าสงสัย")
-            display_pm = per_mat.copy()
-            display_pm.columns = ["ชื่อช่าง", "วัสดุ", "จำนวน", "Z-Score"]
-            display_pm["Z-Score"] = display_pm["Z-Score"].round(2)
-            st.dataframe(display_pm, width=True, hide_index=True)
+            st.warning(f"🚨 พบ {len(pm)} คู่")
+            dp = pm.copy(); dp.columns = ["ช่าง","วัสดุ","จำนวน","Z-Score"]
+            dp["Z-Score"] = dp["Z-Score"].round(2)
+            st.dataframe(dp, use_container_width=True, hide_index=True)
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 🔍 ประวัติการใช้งาน (Audit Log)
+# 🔍 ประวัติ
 # ═══════════════════════════════════════════════════════════════════
 elif page == "🔍 ประวัติการใช้งาน":
-    st.title("🔍 ประวัติการใช้งานระบบ")
-
+    st.title("🔍 ประวัติการใช้งาน")
     audit = ds.get_audit_log()
     if audit.empty:
-        st.info("ยังไม่มีประวัติการใช้งาน")
+        st.info("ยังไม่มีประวัติ")
     else:
-        # Filter by action type
         actions = ["ทั้งหมด"] + sorted(audit["action"].dropna().unique().tolist())
-        action_filter = st.selectbox("กรองตามประเภท", actions)
+        af = st.selectbox("กรอง", actions)
+        da = audit.copy()
+        if af != "ทั้งหมด": da = da[da["action"]==af]
+        da = da.head(200).rename(columns={"timestamp":"เวลา","user":"ผู้ใช้","action":"กระทำ","detail":"รายละเอียด"})
+        st.dataframe(da, use_container_width=True, hide_index=True, height=500)
 
-        display_audit = audit.sort_values("timestamp", ascending=False)
-        if action_filter != "ทั้งหมด":
-            display_audit = display_audit[display_audit["action"] == action_filter]
-        display_audit = display_audit.head(200)
-
-        display_audit = display_audit.rename(columns={
-            "timestamp": "เวลา", "user": "ผู้ใช้",
-            "action": "การกระทำ", "detail": "รายละเอียด"})
-        st.dataframe(display_audit, width=True,
-                     hide_index=True, height=500)
-
-    # Purchase history
-    pur = st.session_state["purchases"]
+    pur = ds.get_purchases()
     if not pur.empty:
-        with st.expander("📋 ประวัติการสั่งซื้อ (จาก Excel)"):
-            cols = [c for c in ["item_name", "supplier_name", "quantity",
-                                 "total_amount", "purchase_date",
-                                 "sheet_category"] if c in pur.columns]
-            display_pur = pur[cols].rename(columns={
-                "item_name": "รายการ", "supplier_name": "ร้านค้า",
-                "quantity": "จำนวน", "total_amount": "ยอดรวม",
-                "purchase_date": "วันที่", "sheet_category": "หมวด"})
-            st.dataframe(display_pur, width=True,
-                         hide_index=True, height=400)
+        with st.expander("📋 ประวัติสั่งซื้อ"):
+            cols = [c for c in ["item_name","supplier_name","quantity","total_amount","purchase_date","sheet_category"] if c in pur.columns]
+            st.dataframe(pur[cols].rename(columns={
+                "item_name":"รายการ","supplier_name":"ร้านค้า","quantity":"จำนวน",
+                "total_amount":"ยอดรวม","purchase_date":"วันที่","sheet_category":"หมวด"}),
+                use_container_width=True, hide_index=True, height=400)
