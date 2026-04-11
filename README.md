@@ -3,11 +3,6 @@
 **อู่เอสพี ออโต้เซอร์วิส** จ.ฉะเชิงเทรา (Eastern Economic Corridor)  
 Streamlit web application for consumable materials management — replacing manual Excel workflows with a digital issuance, tracking, and cost intelligence system.
 
-> **Current Release:** v4.0 — Supabase PostgreSQL + Cost & Supplier Analysis  
-> **Previous Release:** [v2.1.2-streamlit-phase1-optimized](https://github.com/Blackl1stV35/auspautoservice1/releases/tag/v2.1.2-streamlit-phase1-optimized) (CSV + Git backend)
-
----
-
 ## What Changed from v2.1.2
 
 | Area | v2.1.2 (Phase 1) | v4.0 (Current) |
