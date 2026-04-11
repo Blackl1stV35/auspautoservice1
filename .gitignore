@@ -4,3 +4,7 @@ venv/
 .env
 .streamlit/secrets.toml
 venv-streamlit-phase1/
+v1-vba/
+v1-original-python/
+venv*/
+upload_*.xlsx

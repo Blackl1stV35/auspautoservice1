@@ -136,7 +136,7 @@ if page == "🏠 หน้าหลัก":
             fig_m.update_layout(yaxis=dict(autorange="reversed"),
                                 height=380, showlegend=False,
                                 margin=dict(l=0, r=10, t=10, b=0))
-            st.plotly_chart(fig_m, use_container_width=True)
+            st.plotly_chart(fig_m, width=True)
 
         with right:
             st.subheader("👷 Top 10 ช่าง")
@@ -149,7 +149,7 @@ if page == "🏠 หน้าหลัก":
             fig_e.update_layout(yaxis=dict(autorange="reversed"),
                                 height=380, showlegend=False,
                                 margin=dict(l=0, r=10, t=10, b=0))
-            st.plotly_chart(fig_e, use_container_width=True)
+            st.plotly_chart(fig_e, width=True)
 
     # ── Low stock alerts with status badges ──
     if not low.empty:
@@ -158,7 +158,7 @@ if page == "🏠 หน้าหลัก":
         low_display["สถานะ"] = low_display["current_qty"].apply(ds.get_stock_status)
         low_display.rename(columns={"item_name": "วัสดุ", "current_qty": "คงเหลือ"},
                            inplace=True)
-        st.dataframe(low_display, use_container_width=True, hide_index=True)
+        st.dataframe(low_display, width=True, hide_index=True)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -176,7 +176,7 @@ elif page == "📤 อัปโหลด Excel":
         pur_file = st.file_uploader("📄 ไฟล์ต้นทุน/สั่งซื้อ",
                                      type=["xlsx", "xls"], key="pur_upload")
 
-    if st.button("🚀 ประมวลผล ETL", type="primary", use_container_width=True):
+    if st.button("🚀 ประมวลผล ETL", type="primary", width=True):
         if not req_file and not pur_file:
             st.error("กรุณาอัปโหลดไฟล์อย่างน้อย 1 ไฟล์")
         else:
@@ -193,27 +193,38 @@ elif page == "📤 อัปโหลด Excel":
 
             with st.spinner("⏳ กำลังประมวลผล..."):
                 try:
-                    result = run_full_etl(req_path, pur_path)  # auto-commits internally
+                    # Run ETL
+                    result = run_full_etl(req_path, pur_path)
                     refresh_data()
-                    ds.log_audit("admin", "ETL",
-                                 f"อัปโหลด req={bool(req_file)} pur={bool(pur_file)}")
-                    # Explicit final commit to catch audit_log + any stragglers
-                    committed = ds.git_commit("ETL: อัปโหลดไฟล์ Excel + audit log")
-                    st.markdown('<div class="success-box">✅ ประมวลผลสำเร็จ!</div>',
+
+                    # Log audit
+                    ds.log_audit("admin", "ETL Upload", 
+                                f"อัปโหลด req={bool(req_file)} pur={bool(pur_file)}")
+
+                    # Attempt Git commit
+                    committed = ds.git_commit("ETL: อัปโหลดไฟล์ Excel ใหม่ + อัปเดตข้อมูล")
+
+                    # UI Feedback
+                    st.markdown('<div class="success-box">✅ ประมวลผล ETL สำเร็จ!</div>',
                                 unsafe_allow_html=True)
+
+                    # Show summary of loaded data
                     for key, label in [("requisitions", "รายการเบิก"),
                                        ("employees", "รายชื่อช่าง"),
                                        ("materials", "รายการวัสดุ"),
                                        ("purchases", "รายการซื้อ")]:
                         if key in result and not result[key].empty:
                             st.success(f"📊 {label}: {len(result[key])} รายการ")
+
+                    # Git commit status - clearer message
                     if committed:
-                        st.caption("💾 บันทึกลง Git เรียบร้อย")
+                        st.caption("💾 บันทึกข้อมูลลง Git และ Push ไป GitHub เรียบร้อยแล้ว")
                     else:
-                        st.caption("⚠️ ข้อมูล CSV บันทึกแล้ว แต่ Git commit ไม่สำเร็จ "
-                                   "— ตรวจสอบว่าติดตั้ง Git แล้ว")
+                        st.caption("⚠️ ข้อมูลถูกบันทึกเป็น CSV เรียบร้อยแล้ว "
+                                   "แต่ Git commit / push ล้มเหลว (ตรวจสอบ GITHUB_PAT ใน Secrets)")
+
                 except Exception as e:
-                    st.error(f"❌ เกิดข้อผิดพลาด: {e}")
+                    st.error(f"❌ เกิดข้อผิดพลาดในการประมวลผล ETL: {e}")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -257,7 +268,7 @@ elif page == "📝 เบิกวัสดุ":
             f"**{selected_mat}** จำนวน **{quantity}** ชิ้น")
 
         if st.button("✅ ยืนยันเบิกวัสดุ", type="primary",
-                     use_container_width=True):
+                     width=True):
             result = ds.issue_material(selected_emp, selected_mat,
                                        quantity, issued_by)
             if result["ok"]:
@@ -291,7 +302,7 @@ elif page == "📝 เบิกวัสดุ":
                           "employee_name": "ช่าง", "material_name": "วัสดุ",
                           "quantity": "จำนวน", "issued_by": "ผู้บันทึก"}
                 st.dataframe(recent.rename(columns=rename),
-                             use_container_width=True, hide_index=True)
+                             width=True, hide_index=True)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -336,7 +347,7 @@ elif page == "📦 สต็อกวัสดุ":
 
         st.dataframe(
             styled_df.style.apply(highlight_stock, axis=1),
-            use_container_width=True, hide_index=True, height=500)
+            width=True, hide_index=True, height=500)
 
         # ── Stock distribution chart ──
         if len(display) > 0:
@@ -348,7 +359,7 @@ elif page == "📦 สต็อกวัสดุ":
                              "🔴 หมด": "#dc3545", "🟠 วิกฤต": "#fd7e14",
                              "🟡 ต่ำ": "#ffc107", "🟢 ปกติ": "#28a745"},
                          title="สัดส่วนสถานะสต็อก")
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width=True)
 
         # ── Receive stock sub-form ──
         st.divider()
@@ -398,11 +409,11 @@ elif page == "📊 รายงานช่าง":
             usage = (req.groupby("employee_name")["quantity"]
                         .sum().sort_values(ascending=False).reset_index())
             usage.columns = ["ชื่อช่าง", "จำนวนเบิกรวม"]
-            st.dataframe(usage, use_container_width=True, hide_index=True)
+            st.dataframe(usage, width=True, hide_index=True)
             fig = px.bar(usage.head(15), x="ชื่อช่าง", y="จำนวนเบิกรวม",
                          color="จำนวนเบิกรวม", color_continuous_scale="Reds")
             fig.update_layout(height=400)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width=True)
 
         elif view_mode == "เปรียบเทียบรายเดือน":
             # Monthly comparison — grouped bar chart
@@ -422,12 +433,12 @@ elif page == "📊 รายงานช่าง":
                              labels={"employee_name": "ช่าง", "quantity": "จำนวน",
                                      "period": "เดือน/ปี"})
                 fig.update_layout(height=450)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width=True)
 
                 st.subheader("📋 ตารางสะสมรายเดือน (แบบ VBA)")
                 monthly_pivot = ds.get_monthly_summary()
                 if not monthly_pivot.empty:
-                    st.dataframe(monthly_pivot, use_container_width=True)
+                    st.dataframe(monthly_pivot, width=True)
 
         else:  # รายบุคคล
             selected = st.selectbox("เลือกช่าง", emp_names)
@@ -440,10 +451,10 @@ elif page == "📊 รายงานช่าง":
             c1.metric("จำนวนเบิกทั้งหมด", int(by_mat["จำนวน"].sum()))
             c2.metric("จำนวนรายการวัสดุ", len(by_mat))
 
-            st.dataframe(by_mat, use_container_width=True, hide_index=True)
+            st.dataframe(by_mat, width=True, hide_index=True)
             fig = px.pie(by_mat.head(10), values="จำนวน", names="วัสดุ",
                          title=f"สัดส่วนวัสดุที่ {selected} เบิก")
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width=True)
 
             # Monthly breakdown for this employee
             if "month" in emp_req.columns and "year" in emp_req.columns:
@@ -458,7 +469,7 @@ elif page == "📊 รายงานช่าง":
                     fig2 = px.line(monthly, x="period", y="quantity",
                                    markers=True,
                                    labels={"period": "เดือน", "quantity": "จำนวน"})
-                    st.plotly_chart(fig2, use_container_width=True)
+                    st.plotly_chart(fig2, width=True)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -475,7 +486,7 @@ elif page == "🗓️ สรุปรายเดือน":
         if pivot_emp.empty:
             st.warning("ยังไม่มีข้อมูล")
         else:
-            st.dataframe(pivot_emp, use_container_width=True, height=500)
+            st.dataframe(pivot_emp, width=True, height=500)
 
             st.subheader("📊 กราฟเปรียบเทียบยอดรวม")
             totals = pivot_emp["รวมทั้งหมด"].reset_index()
@@ -483,14 +494,14 @@ elif page == "🗓️ สรุปรายเดือน":
             fig = px.bar(totals.sort_values("รวม", ascending=False).head(15),
                          x="ช่าง", y="รวม", color="รวม",
                          color_continuous_scale="Reds")
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width=True)
 
     with tab2:
         pivot_mat = ds.get_monthly_by_material()
         if pivot_mat.empty:
             st.warning("ยังไม่มีข้อมูล")
         else:
-            st.dataframe(pivot_mat, use_container_width=True, height=500)
+            st.dataframe(pivot_mat, width=True, height=500)
 
             st.subheader("📊 กราฟเปรียบเทียบยอดรวม")
             totals = pivot_mat["รวมทั้งหมด"].reset_index()
@@ -498,7 +509,7 @@ elif page == "🗓️ สรุปรายเดือน":
             fig = px.bar(totals.sort_values("รวม", ascending=False).head(15),
                          x="วัสดุ", y="รวม", color="รวม",
                          color_continuous_scale="Oranges")
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width=True)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -546,11 +557,11 @@ elif page == "🔥 Heatmap การใช้งาน":
                 xaxis=dict(tickangle=45),
                 margin=dict(l=0, r=0, t=30, b=0),
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width=True)
 
             # Raw data expander
             with st.expander("📋 ดูตาราง Pivot"):
-                st.dataframe(pivot, use_container_width=True)
+                st.dataframe(pivot, width=True)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -573,7 +584,7 @@ elif page == "⚠️ ตรวจจับความผิดปกติ":
             display_a = anomalies.copy()
             display_a.columns = ["ชื่อช่าง", "จำนวนเบิกรวม", "Z-Score"]
             display_a["Z-Score"] = display_a["Z-Score"].round(2)
-            st.dataframe(display_a, use_container_width=True, hide_index=True)
+            st.dataframe(display_a, width=True, hide_index=True)
 
         # All employees bar chart
         req = st.session_state["requisitions"]
@@ -592,7 +603,7 @@ elif page == "⚠️ ตรวจจับความผิดปกติ":
                               line_dash="dot", line_color="orange",
                               annotation_text=f"เกณฑ์ผิดปกติ (Z={threshold})")
             fig.update_layout(height=400)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width=True)
 
     with tab2:
         st.markdown("ตรวจจับช่างที่เบิก **วัสดุแต่ละชนิด** มากผิดปกติ "
@@ -605,7 +616,7 @@ elif page == "⚠️ ตรวจจับความผิดปกติ":
             display_pm = per_mat.copy()
             display_pm.columns = ["ชื่อช่าง", "วัสดุ", "จำนวน", "Z-Score"]
             display_pm["Z-Score"] = display_pm["Z-Score"].round(2)
-            st.dataframe(display_pm, use_container_width=True, hide_index=True)
+            st.dataframe(display_pm, width=True, hide_index=True)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -630,7 +641,7 @@ elif page == "🔍 ประวัติการใช้งาน":
         display_audit = display_audit.rename(columns={
             "timestamp": "เวลา", "user": "ผู้ใช้",
             "action": "การกระทำ", "detail": "รายละเอียด"})
-        st.dataframe(display_audit, use_container_width=True,
+        st.dataframe(display_audit, width=True,
                      hide_index=True, height=500)
 
     # Purchase history
@@ -644,5 +655,5 @@ elif page == "🔍 ประวัติการใช้งาน":
                 "item_name": "รายการ", "supplier_name": "ร้านค้า",
                 "quantity": "จำนวน", "total_amount": "ยอดรวม",
                 "purchase_date": "วันที่", "sheet_category": "หมวด"})
-            st.dataframe(display_pur, use_container_width=True,
+            st.dataframe(display_pur, width=True,
                          hide_index=True, height=400)

@@ -225,70 +225,54 @@ def _ensure_git_repo(root: str) -> bool:
     return True
 
 
-def git_commit(message: str) -> bool:
-    """
-    Stage data/, commit locally, and push to GitHub if a PAT is configured.
-
-    Handles automatically:
-      • No .git yet          → git init + branch -M main
-      • No user.email/name   → auto-configures
-      • No remote            → adds origin from secrets
-      • Untracked files      → git add -A data/
-      • Nothing to commit    → returns True (not an error)
-      • Push failure          → still returns True (local commit succeeded)
-
-    Returns True if the LOCAL commit succeeded (push failure is logged
-    but does not count as overall failure — the data is safe on disk).
-    """
+def git_commit(message: str):
+    """Robust git commit that works on Streamlit Cloud using PAT from secrets."""
     try:
+        import os
+        from subprocess import run, CalledProcessError
+
         root = os.path.dirname(DATA_DIR)
+        pat = os.getenv("GITHUB_PAT") or os.getenv("GIT_TOKEN")
 
-        # 1. Ensure repo + identity + remote
-        if not _ensure_git_repo(root):
+        if not pat:
+            logger.warning("No GITHUB_PAT found in secrets - skipping git commit (Cloud mode)")
             return False
 
-        # 2. Stage all changes under data/
-        add_r = _run_git(["add", "-A", "data/"], root)
-        if add_r.returncode != 0:
-            logger.warning(f"git add failed: {add_r.stderr.strip()}")
-            return False
+        # Configure git with PAT for HTTPS
+        run(["git", "config", "--global", "user.name", "Streamlit Cloud"], cwd=root, check=True)
+        run(["git", "config", "--global", "user.email", "streamlit@auspautoservice1.com"], cwd=root, check=True)
 
-        # 3. Anything staged?
-        status = _run_git(["status", "--porcelain", "data/"], root)
-        if status.returncode == 0 and not status.stdout.strip():
-            logger.info("Git: nothing to commit (data/ unchanged)")
-            return True
+        # Force add data/ (handles new or ignored files)
+        result = run(["git", "add", "-f", "data/"], cwd=root, capture_output=True, text=True)
+        if result.returncode != 0:
+            logger.warning(f"git add failed: {result.stderr}")
 
-        # 4. Commit
-        commit_r = _run_git(["commit", "-m", message], root)
-        if commit_r.returncode != 0:
-            combined = commit_r.stdout + commit_r.stderr
-            if "nothing to commit" in combined:
-                logger.info("Git: nothing to commit (confirmed)")
+        # Commit
+        result = run(["git", "commit", "-m", message], cwd=root, capture_output=True, text=True)
+        
+        if result.returncode == 0:
+            logger.info(f"Git commit successful: {message}")
+            
+            # Push using PAT
+            push_url = f"https://{pat}@github.com/Blackl1stV35/auspautoservice1.git"
+            push_result = run(["git", "push", push_url, "main"], cwd=root, capture_output=True, text=True)
+            
+            if push_result.returncode == 0:
+                logger.info("Git push to GitHub successful")
                 return True
-            logger.warning(
-                f"git commit FAILED (rc={commit_r.returncode})\n"
-                f"  stdout: {commit_r.stdout.strip()}\n"
-                f"  stderr: {commit_r.stderr.strip()}")
+            else:
+                logger.error(f"Git push failed: {push_result.stderr}")
+                return False
+        else:
+            # No changes to commit is normal and not an error
+            if "nothing to commit" in result.stdout.lower() or "nothing to commit" in result.stderr.lower():
+                logger.info("No changes to commit")
+                return True
+            logger.warning(f"Git commit skipped: {result.stderr}")
             return False
 
-        logger.info(f"Git commit OK: {message}")
-
-        # 5. Push (best-effort — local commit already succeeded)
-        _git_push(root)
-
-        return True
-
-    except FileNotFoundError:
-        logger.warning(
-            "Git executable not found. "
-            "Install from https://git-scm.com and restart.")
-        return False
-    except subprocess.TimeoutExpired:
-        logger.warning("Git operation timed out (>30s)")
-        return False
     except Exception as e:
-        logger.warning(f"Git unexpected error: {e}", exc_info=True)
+        logger.error(f"Git commit/push error: {e}")
         return False
 
 
