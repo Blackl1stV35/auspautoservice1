@@ -108,28 +108,67 @@ def get_audit_log() -> pd.DataFrame:
 # Audit & Git
 # ═══════════════════════════════════════════════════════════════════
 
-def log_audit(user: str, action: str, detail: str):
+def log_audit(user: str, action: str, detail: str, commit: bool = False):
+    """
+    Append one row to audit_log.csv.
+    Args:
+        commit: If True, also git-commit immediately after writing.
+                Default False because callers like issue_material() /
+                add_stock() commit at the end of their own transaction.
+                Set True when log_audit is the *only* mutation in a flow
+                (e.g. standalone admin notes).
+    """
     append_row("audit_log", {
         "timestamp": datetime.now().isoformat(),
         "user": user,
         "action": action,
         "detail": detail,
     })
+    if commit:
+        git_commit(f"audit: {action} — {detail[:60]}")
 
 
-def git_commit(message: str):
-    """Best-effort git add+commit; never crashes the app."""
+def git_commit(message: str) -> bool:
+    """
+    Stage data/ and commit. Returns True on success, False on failure.
+    Never crashes the app — all errors are caught and logged.
+    """
     try:
         root = os.path.dirname(DATA_DIR)
-        subprocess.run(["git", "add", "data/"], cwd=root,
-                       capture_output=True, timeout=10)
-        subprocess.run(["git", "commit", "-m", message], cwd=root,
-                       capture_output=True, timeout=10)
-        logger.info(f"Git commit: {message}")
+
+        # Stage
+        add_result = subprocess.run(
+            ["git", "add", "data/"], cwd=root,
+            capture_output=True, text=True, timeout=10,
+        )
+        if add_result.returncode != 0:
+            logger.warning(f"git add failed: {add_result.stderr.strip()}")
+            return False
+
+        # Commit
+        commit_result = subprocess.run(
+            ["git", "commit", "-m", message], cwd=root,
+            capture_output=True, text=True, timeout=10,
+        )
+        # returncode 1 with "nothing to commit" is not an error
+        if commit_result.returncode == 0:
+            logger.info(f"Git commit OK: {message}")
+            return True
+        if "nothing to commit" in commit_result.stdout:
+            logger.info("Git: nothing to commit (no changes)")
+            return True
+        logger.warning(f"git commit failed: {commit_result.stderr.strip()}")
+        return False
+
     except FileNotFoundError:
-        logger.warning("Git not on PATH — skipping commit")
+        logger.warning("Git not found on PATH — commits disabled")
+        return False
+    except subprocess.TimeoutExpired:
+        logger.warning("Git commit timed out")
+        return False
     except Exception as e:
-        logger.warning(f"Git commit skipped: {e}")
+        logger.warning(f"Git commit error: {e}")
+        return False
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -235,16 +274,16 @@ def issue_material(employee_name: str, material_name: str, quantity: int,
     # 3. Audit + Git
     detail = f"{employee_name} เบิก {material_name} x{quantity} [{tx_id}]"
     log_audit(issued_by, "เบิกวัสดุ", detail)
-    git_commit(f"เบิก: {detail}")
+    committed = git_commit(f"เบิก: {detail}")
 
-    return {"ok": True, "tx_id": tx_id,
+    return {"ok": True, "tx_id": tx_id, "committed": committed,
             "msg": f"✅ สำเร็จ! {employee_name} เบิก {material_name} x{quantity}"}
 
 
-def add_stock(material_name: str, quantity: int, user: str = "system"):
-    """Add stock from purchase/receiving."""
+def add_stock(material_name: str, quantity: int, user: str = "system") -> dict:
+    """Add stock from purchase/receiving. Returns result dict."""
     if quantity <= 0:
-        return
+        return {"ok": False, "committed": False, "msg": "จำนวนต้องมากกว่า 0"}
     stock = load("stock")
     now = datetime.now()
 
@@ -271,7 +310,9 @@ def add_stock(material_name: str, quantity: int, user: str = "system"):
 
     save("stock", stock)
     log_audit(user, "รับวัสดุเข้า", f"{material_name} +{quantity}")
-    git_commit(f"รับเข้า: {material_name} +{quantity}")
+    committed = git_commit(f"รับเข้า: {material_name} +{quantity}")
+    return {"ok": True, "committed": committed,
+            "msg": f"✅ รับเข้า {material_name} +{quantity}"}
 
 
 # ═══════════════════════════════════════════════════════════════════
