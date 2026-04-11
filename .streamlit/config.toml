@@ -1,7 +1,6 @@
 [server]
 headless = true
 port = 8501
-fileWatcherType = "none"
 
 [theme]
 primaryColor = "#FF6B35"
@@ -12,4 +11,3 @@ font = "sans serif"
 
 [browser]
 gatherUsageStats = false
-
