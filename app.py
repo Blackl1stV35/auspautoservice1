@@ -86,6 +86,17 @@ page = st.sidebar.radio("เมนู", [
 ], index=0)
 
 st.sidebar.divider()
+# ── Git status indicator ──
+_git = ds.git_status_info()
+if _git["initialized"]:
+    if _git["has_remote"]:
+        st.sidebar.caption(f"🟢 Git: {_git['repo'] or 'connected'}")
+    else:
+        st.sidebar.caption("🟡 Git: local only (ไม่มี remote)")
+    if _git["last_commit"]:
+        st.sidebar.caption(f"📝 {_git['last_commit']}")
+else:
+    st.sidebar.caption("⚪ Git: ยังไม่ได้ตั้งค่า (จะสร้างอัตโนมัติ)")
 st.sidebar.caption(f"📅 {datetime.now().strftime('%d/%m/%Y %H:%M')}")
 
 
@@ -251,13 +262,15 @@ elif page == "📝 เบิกวัสดุ":
                                        quantity, issued_by)
             if result["ok"]:
                 refresh_data()
-                git_icon = "💾" if result.get("committed") else "⚠️"
-                git_text = ("บันทึกลง Git แล้ว" if result.get("committed")
-                            else "ข้อมูลบันทึกแล้ว แต่ Git commit ไม่สำเร็จ")
+                if result.get("committed"):
+                    git_line = "💾 บันทึกและซิงค์ Git สำเร็จ"
+                else:
+                    git_line = ("⚠️ ข้อมูล CSV บันทึกแล้ว แต่ Git commit ไม่สำเร็จ "
+                                "— ตรวจสอบว่าติดตั้ง Git และตั้ง token ใน secrets.toml")
                 st.markdown(
                     f'<div class="success-box">{result["msg"]}</div>'
                     f'<div class="tx-id">🔖 รหัส: {result["tx_id"]}  '
-                    f'{git_icon} {git_text}</div>',
+                    f'{git_line}</div>',
                     unsafe_allow_html=True)
                 st.balloons()
             else:
@@ -354,10 +367,13 @@ elif page == "📦 สต็อกวัสดุ":
             result = ds.add_stock(add_mat, add_qty, add_user)
             refresh_data()
             if result and result.get("ok"):
-                git_icon = "💾" if result.get("committed") else "⚠️"
-                st.success(f"{result['msg']}  {git_icon}")
+                if result.get("committed"):
+                    st.success(f"{result['msg']}  💾 ซิงค์ Git สำเร็จ")
+                else:
+                    st.success(result["msg"])
+                    st.caption("⚠️ CSV บันทึกแล้ว แต่ Git commit ไม่สำเร็จ")
             else:
-                st.warning(result.get("msg", "ไม่สามารถเพิ่มสต็อกได้"))
+                st.warning(result.get("msg", "ไม่สามารถเพิ่มสต็อกได้") if result else "ไม่สามารถเพิ่มสต็อกได้")
             st.rerun()
 
 

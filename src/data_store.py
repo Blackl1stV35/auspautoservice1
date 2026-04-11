@@ -128,12 +128,51 @@ def log_audit(user: str, action: str, detail: str, commit: bool = False):
         git_commit(f"audit: {action} — {detail[:60]}")
 
 
-def _run_git(args: list[str], root: str) -> subprocess.CompletedProcess:
-    """Run a git command and return the CompletedProcess. Logs debug info."""
+def _get_github_config() -> dict:
+    """
+    Read GitHub PAT + repo from Streamlit secrets or environment variables.
+    Supports both .streamlit/secrets.toml and os.environ fallback.
+
+    secrets.toml format:
+        [github]
+        token = "your_personal_access_token"
+        repo  = "username/repo-name"
+    """
+    token = None
+    repo  = None
+
+    # Try Streamlit secrets first
+    try:
+        import streamlit as st
+        gh = st.secrets.get("github", {})
+        token = gh.get("token")
+        repo  = gh.get("repo")
+    except Exception:
+        pass
+
+    # Fallback to environment variables
+    if not token:
+        token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if not repo:
+        repo = os.environ.get("GITHUB_REPO")
+
+    return {"token": token, "repo": repo}
+
+
+def _run_git(args: list[str], root: str,
+             env_override: dict = None) -> subprocess.CompletedProcess:
+    """Run a git command, log debug output, return CompletedProcess."""
     cmd = ["git"] + args
-    logger.debug(f"Git command: {' '.join(cmd)}  cwd={root}")
+    # Merge env_override into a copy of the current environment
+    env = None
+    if env_override:
+        env = os.environ.copy()
+        env.update(env_override)
+
+    logger.debug(f"Git: {' '.join(cmd)}  cwd={root}")
     result = subprocess.run(
-        cmd, cwd=root, capture_output=True, text=True, timeout=15,
+        cmd, cwd=root, capture_output=True, text=True,
+        timeout=30, env=env,
     )
     if result.returncode != 0:
         logger.debug(f"  rc={result.returncode}  "
@@ -144,94 +183,179 @@ def _run_git(args: list[str], root: str) -> subprocess.CompletedProcess:
 
 def _ensure_git_repo(root: str) -> bool:
     """
-    Make sure `root` is a git repository with user identity configured.
-    Auto-initialises and configures if missing — the user should never
-    have to touch the terminal for git to work.
+    Guarantee that `root` is a git repo with user identity configured
+    and the GitHub remote set (if a PAT is available).
+    Auto-creates everything the user would otherwise need to do manually.
     """
     git_dir = os.path.join(root, ".git")
+
+    # ── Init ──
     if not os.path.isdir(git_dir):
-        logger.info("No .git found — initialising repository automatically")
+        logger.info("No .git found — running git init")
         r = _run_git(["init"], root)
         if r.returncode != 0:
             logger.warning(f"git init failed: {r.stderr.strip()}")
             return False
+        # Initial branch name
+        _run_git(["branch", "-M", "main"], root)
 
-    # Ensure user identity (git commit refuses without it)
+    # ── User identity ──
     for key, default in [("user.email", "sp-auto@local"),
                          ("user.name",  "SP Auto Service")]:
-        check = _run_git(["config", key], root)
-        if check.returncode != 0 or not check.stdout.strip():
+        chk = _run_git(["config", key], root)
+        if chk.returncode != 0 or not chk.stdout.strip():
             _run_git(["config", key, default], root)
-            logger.info(f"Auto-configured git {key} = {default}")
+            logger.info(f"Auto-set git {key} = {default}")
+
+    # ── Remote "origin" ──
+    gh = _get_github_config()
+    if gh["token"] and gh["repo"]:
+        remote_url = f"https://x-access-token:{gh['token']}@github.com/{gh['repo']}.git"
+
+        existing = _run_git(["remote", "get-url", "origin"], root)
+        if existing.returncode != 0:
+            # No remote yet — add it
+            _run_git(["remote", "add", "origin", remote_url], root)
+            logger.info(f"Added remote origin → {gh['repo']}")
+        elif gh["token"] not in existing.stdout:
+            # Remote exists but URL changed / token rotated — update it
+            _run_git(["remote", "set-url", "origin", remote_url], root)
+            logger.info("Updated remote origin URL with new token")
 
     return True
 
 
 def git_commit(message: str) -> bool:
     """
-    Stage everything under data/ and commit.
+    Stage data/, commit locally, and push to GitHub if a PAT is configured.
 
     Handles automatically:
-      • No .git yet → runs git init
-      • No user.email/name → auto-configures
-      • Untracked files → uses 'git add -A data/'
-      • Nothing to commit → returns True (not an error)
+      • No .git yet          → git init + branch -M main
+      • No user.email/name   → auto-configures
+      • No remote            → adds origin from secrets
+      • Untracked files      → git add -A data/
+      • Nothing to commit    → returns True (not an error)
+      • Push failure          → still returns True (local commit succeeded)
 
-    Returns True on success, False on genuine failure.
-    Never crashes the app.
+    Returns True if the LOCAL commit succeeded (push failure is logged
+    but does not count as overall failure — the data is safe on disk).
     """
     try:
         root = os.path.dirname(DATA_DIR)
 
-        # 1. Ensure repo + identity exist
+        # 1. Ensure repo + identity + remote
         if not _ensure_git_repo(root):
             return False
 
-        # 2. Stage — use -A to catch new, modified, AND deleted files
-        add_result = _run_git(["add", "-A", "data/"], root)
-        if add_result.returncode != 0:
-            logger.warning(f"git add failed: {add_result.stderr.strip()}")
+        # 2. Stage all changes under data/
+        add_r = _run_git(["add", "-A", "data/"], root)
+        if add_r.returncode != 0:
+            logger.warning(f"git add failed: {add_r.stderr.strip()}")
             return False
 
-        # 3. Check if there is anything staged (avoids a misleading
-        #    "nothing to commit" failure on returncode 1)
+        # 3. Anything staged?
         status = _run_git(["status", "--porcelain", "data/"], root)
         if status.returncode == 0 and not status.stdout.strip():
             logger.info("Git: nothing to commit (data/ unchanged)")
-            return True  # no changes is still success
+            return True
 
         # 4. Commit
-        commit_result = _run_git(["commit", "-m", message], root)
-        if commit_result.returncode == 0:
-            logger.info(f"Git commit OK: {message}")
-            return True
+        commit_r = _run_git(["commit", "-m", message], root)
+        if commit_r.returncode != 0:
+            combined = commit_r.stdout + commit_r.stderr
+            if "nothing to commit" in combined:
+                logger.info("Git: nothing to commit (confirmed)")
+                return True
+            logger.warning(
+                f"git commit FAILED (rc={commit_r.returncode})\n"
+                f"  stdout: {commit_r.stdout.strip()}\n"
+                f"  stderr: {commit_r.stderr.strip()}")
+            return False
 
-        # "nothing to commit" can also appear here on some git versions
-        combined = commit_result.stdout + commit_result.stderr
-        if "nothing to commit" in combined:
-            logger.info("Git: nothing to commit (confirmed)")
-            return True
+        logger.info(f"Git commit OK: {message}")
 
-        # Genuine failure — log full output for debugging
-        logger.warning(
-            f"git commit FAILED (rc={commit_result.returncode})\n"
-            f"  stdout: {commit_result.stdout.strip()}\n"
-            f"  stderr: {commit_result.stderr.strip()}"
-        )
-        return False
+        # 5. Push (best-effort — local commit already succeeded)
+        _git_push(root)
+
+        return True
 
     except FileNotFoundError:
         logger.warning(
-            "Git executable not found on PATH. "
-            "Install Git from https://git-scm.com and restart the app."
-        )
+            "Git executable not found. "
+            "Install from https://git-scm.com and restart.")
         return False
     except subprocess.TimeoutExpired:
-        logger.warning("Git commit timed out (>15s)")
+        logger.warning("Git operation timed out (>30s)")
         return False
     except Exception as e:
-        logger.warning(f"Git commit unexpected error: {e}", exc_info=True)
+        logger.warning(f"Git unexpected error: {e}", exc_info=True)
         return False
+
+
+def _git_push(root: str):
+    """
+    Push to origin/main. Best-effort: logs warnings but never raises.
+    Uses the PAT embedded in the remote URL (set by _ensure_git_repo).
+    """
+    gh = _get_github_config()
+    if not gh["token"] or not gh["repo"]:
+        logger.info("No GitHub token configured — skipping push "
+                     "(local commits only)")
+        return
+
+    # Determine current branch name
+    branch_r = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], root)
+    branch = branch_r.stdout.strip() if branch_r.returncode == 0 else "main"
+
+    # Push with token (token is in the remote URL already)
+    push_r = _run_git(["push", "-u", "origin", branch], root)
+
+    if push_r.returncode == 0:
+        logger.info(f"Git push OK → origin/{branch}")
+    else:
+        stderr = push_r.stderr.strip()
+        # First push on empty remote needs --set-upstream; retry
+        if "has no upstream" in stderr or "set-upstream" in stderr:
+            retry = _run_git(["push", "--set-upstream", "origin", branch], root)
+            if retry.returncode == 0:
+                logger.info(f"Git push OK (set-upstream) → origin/{branch}")
+                return
+        logger.warning(f"Git push failed (non-fatal): {stderr}")
+
+
+def git_status_info() -> dict:
+    """
+    Return a dict with current git state for the UI sidebar.
+    Keys: initialized, has_remote, last_commit, branch, repo
+    """
+    root = os.path.dirname(DATA_DIR)
+    info = {"initialized": False, "has_remote": False,
+            "last_commit": None, "branch": None, "repo": None}
+    try:
+        git_dir = os.path.join(root, ".git")
+        if not os.path.isdir(git_dir):
+            return info
+        info["initialized"] = True
+
+        br = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], root)
+        if br.returncode == 0:
+            info["branch"] = br.stdout.strip()
+
+        log = _run_git(["log", "-1", "--format=%s (%ar)"], root)
+        if log.returncode == 0:
+            info["last_commit"] = log.stdout.strip()
+
+        remote = _run_git(["remote", "get-url", "origin"], root)
+        if remote.returncode == 0 and remote.stdout.strip():
+            info["has_remote"] = True
+            # Show repo name without token
+            url = remote.stdout.strip()
+            if "github.com/" in url:
+                info["repo"] = url.split("github.com/")[-1].replace(".git", "")
+
+    except Exception:
+        pass
+    return info
 
 
 # ═══════════════════════════════════════════════════════════════════
