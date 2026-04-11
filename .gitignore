@@ -2,6 +2,6 @@ __pycache__/
 *.pyc
 venv/
 .env
-data/upload_*.xlsx
+data/
 .streamlit/secrets.toml
-venv-strealit-phase1/
+venv-streamlit-phase1/
