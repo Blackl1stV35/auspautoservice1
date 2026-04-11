@@ -1,26 +1,7 @@
-# Python virtual environments
-venv/
-venv-streamlit-phase1/
-venv*/
-
-# Python cache
 __pycache__/
 *.pyc
-*.pyo
-*.pyd
-
-# Streamlit
-.streamlit/secrets.toml
-
-# Environment variables
+venv/
 .env
-
-# OS generated files
-.DS_Store
-Thumbs.db
-
-# Temporary upload files from Excel
 data/upload_*.xlsx
-
-# Logs
-*.log
+.streamlit/secrets.toml
+venv-strealit-phase1/
